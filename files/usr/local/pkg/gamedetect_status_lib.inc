@@ -290,3 +290,46 @@ function gd_status_update_html(array $check, array $run, bool $can_update, strin
 	}
 	return $out;
 }
+
+/*
+ * The Clients tab's own refresh feed (?refresh=clients) and its initial
+ * embedded data: only what the page script renders. $file is clients.json,
+ * $banner the gd_status_banner() text. Each client keeps ip, mac, hostname,
+ * game, game_id, confidence, flows, last_seen and top_destinations (ip,
+ * port, names); scores, candidates, evidence, first_seen and the daemon
+ * state are not sent. poll_interval falls back to $default_poll when
+ * clients.json has no valid one, generated_at to $now.
+ */
+function gd_status_refresh_payload(array $file, ?string $banner, int $default_poll, string $now): array {
+	$keys = ['ip', 'mac', 'hostname', 'game', 'game_id', 'confidence', 'flows', 'last_seen'];
+	$clients = [];
+	foreach ((array)($file['clients'] ?? []) as $c) {
+		if (!is_array($c)) {
+			continue;
+		}
+		$row = [];
+		foreach ($keys as $k) {
+			if (array_key_exists($k, $c)) {
+				$row[$k] = $c[$k];
+			}
+		}
+		$row['top_destinations'] = [];
+		foreach ((array)($c['top_destinations'] ?? []) as $d) {
+			if (is_array($d)) {
+				$row['top_destinations'][] = [
+				    'ip' => $d['ip'] ?? null,
+				    'port' => $d['port'] ?? null,
+				    'names' => array_values(array_filter((array)($d['names'] ?? []), 'is_scalar')),
+				];
+			}
+		}
+		$clients[] = $row;
+	}
+	$pi = $file['poll_interval'] ?? null;
+	return [
+	    'clients' => $clients,
+	    'poll_interval' => is_int($pi) && $pi >= 2 && $pi <= 60 ? $pi : $default_poll,
+	    'generated_at' => is_string($file['generated_at'] ?? null) ? $file['generated_at'] : $now,
+	    'banner' => $banner,
+	];
+}

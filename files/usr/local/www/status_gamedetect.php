@@ -5,9 +5,11 @@
  *
  * Status -> Game Detect: live client table (Clients), unclassified UDP
  * destinations (Unclassified), and the live signature file (Signatures).
- * ?format=json returns clients.json plus generated_at, daemon, and banner;
- * the Clients tab polls it every poll_interval seconds and rebuilds the
- * table body in place. Access is the page-status-gamedetect privilege.
+ * ?refresh=clients is the Clients tab's own refresh feed (page-internal,
+ * same access as the page): only the fields the table script renders
+ * (gd_status_refresh_payload()). The tab polls it every poll_interval
+ * seconds and rebuilds the table body in place. Access is the
+ * page-status-gamedetect privilege.
  * POST act=reset_signatures (Signatures tab "Reset to defaults"),
  * act=update (Update now) and act=update_check (Check now) also need the
  * settings privilege (pkg_edit.php?xml=gamedetect.xml), checked before any
@@ -19,16 +21,10 @@ require_once('guiconfig.inc');
 require_once('/usr/local/pkg/gamedetect.inc');
 require_once('/usr/local/pkg/gamedetect_status_lib.inc');
 
-/* clients.json normalised for the page and the JSON endpoint. */
+/* The Clients tab data: clients.json trimmed to what the page renders. */
 function gamedetect_page_payload(array $daemon): array {
-	$p = gd_read_json(gamedetect_path('data_dir') . '/clients.json') ?? [];
-	$p['clients'] = array_values(array_filter((array)($p['clients'] ?? []), 'is_array'));
-	$pi = $p['poll_interval'] ?? null;
-	$p['poll_interval'] = is_int($pi) && $pi >= 2 && $pi <= 60 ? $pi : gamedetect_settings()['poll_interval'];
-	$p['generated_at'] = is_string($p['generated_at'] ?? null) ? $p['generated_at'] : date(DATE_ATOM);
-	$p['daemon'] = $daemon;
-	$p['banner'] = gd_status_banner($daemon);
-	return $p;
+	return gd_status_refresh_payload(gd_read_json(gamedetect_path('data_dir') . '/clients.json') ?? [],
+	    gd_status_banner($daemon), gamedetect_settings()['poll_interval'], date(DATE_ATOM));
 }
 
 $gd_daemon = gamedetect_status();
@@ -77,7 +73,7 @@ if (($_GET['format'] ?? null) === 'update_status') {
 	exit;
 }
 
-if (($_GET['format'] ?? null) === 'json') {
+if (($_GET['refresh'] ?? null) === 'clients') {
 	header('Content-Type: application/json');
 	header('Cache-Control: no-store');
 	echo json_encode(gamedetect_page_payload($gd_daemon), JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
@@ -210,7 +206,7 @@ if ($gd_tab === 'clients'):
 <script type="text/javascript">
 //<![CDATA[
 events.push(function () {
-	var url = 'status_gamedetect.php?format=json';
+	var url = 'status_gamedetect.php?refresh=clients';
 	var data = <?=json_encode($gd_payload, JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)?>;
 	var txt = <?=json_encode([
 	    'summary' => gettext('Clients: %t  Playing: %p  Unknown: %u'),

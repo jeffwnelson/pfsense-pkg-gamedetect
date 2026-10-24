@@ -197,3 +197,80 @@ function gamedetect_reset_signatures(string $live, string $default, ?int $now = 
 	}
 	return ['ok' => true, 'backup' => $backup, 'error' => null];
 }
+
+/* "Y-m-d H:i" (firewall local time) from an ISO-8601 timestamp, else the raw value. */
+function gd_status_datetime($iso): string {
+	$t = is_string($iso) && $iso !== '' ? strtotime($iso) : false;
+	return $t === false ? (string)$iso : date('Y-m-d H:i', $t);
+}
+
+/* A small POST form back to $action with one act button (csrf-magic adds the token). */
+function gd_status_update_form(string $action, string $act, string $cls, string $icon, string $label): string {
+	$h = 'gd_status_h';
+	return '<form method="post" action="' . $h($action) . '" class="gd-update-form" style="display:inline">'
+	    . '<input type="hidden" name="act" value="' . $h($act) . '">'
+	    . '<button type="submit" class="btn btn-xs ' . $h($cls) . '"><i class="fa-solid ' . $h($icon) . '"></i> ' . $h($label) . '</button>'
+	    . '</form>';
+}
+
+/*
+ * Update banner for every tab of the status page. $check is update.json,
+ * $run is gd_update_run_view() of update-run.json, $can_update is the
+ * settings privilege, $action the page URL the forms post to. While an update
+ * runs: a progress note (the page script polls and reloads). Otherwise the
+ * last result (for a day), then "vX is available" with the release notes
+ * link and, for $can_update, Update now / Check now. With nothing available,
+ * $can_update users get a quiet "last checked" line with Check now. Every
+ * value is escaped; release_url is linked only on github.com.
+ */
+function gd_status_update_html(array $check, array $run, bool $can_update, string $action, int $now): string {
+	$h = 'gd_status_h';
+	$ver = fn($v) => is_string($v) && preg_match('/^\d{1,6}\.\d{1,6}\.\d{1,6}\z/', $v) === 1 ? $v : null;
+	$state = (string)($run['state'] ?? 'idle');
+	if ($state === 'running') {
+		$to = $ver($run['to'] ?? null);
+		return '<div class="alert alert-info" role="alert" id="gd-update-running">'
+		    . '<i class="fa-solid fa-gear fa-spin"></i> '
+		    . $h('Updating to ' . ($to !== null ? "v{$to}" : 'the new version') . ' — this page will reload when done.')
+		    . '</div>';
+	}
+	$out = '';
+	$fin = strtotime((string)($run['finished_at'] ?? ''));
+	if (in_array($state, ['done', 'failed'], true) && $fin !== false && $now - $fin <= 86400) {
+		$to = $ver($run['to'] ?? null);
+		$when = ' <span class="text-muted">(' . $h(gd_status_datetime($run['finished_at'])) . ')</span>';
+		if ($state === 'done') {
+			$out .= '<div class="alert alert-success" role="alert">'
+			    . $h('Game Detect was updated to ' . ($to !== null ? "v{$to}" : 'the new version') . '.') . $when . '</div>';
+		} else {
+			$log = (string)($run['log'] ?? '');
+			$out .= '<div class="alert alert-danger" role="alert">'
+			    . $h('The update to ' . ($to !== null ? "v{$to}" : 'the new version') . ' failed: ' . (string)($run['error'] ?? 'unknown error')) . $when
+			    . ($log !== '' ? '<details><summary>' . $h('Updater output') . '</summary><pre>' . $h($log) . '</pre></details>' : '')
+			    . '</div>';
+		}
+	}
+	$latest = $ver($check['latest'] ?? null);
+	$checked = is_string($check['checked_at'] ?? null)
+	    ? 'Last checked ' . gd_status_datetime($check['checked_at']) . '.' : 'Not checked yet.';
+	$err = is_scalar($check['error'] ?? null) && (string)$check['error'] !== '' ? ' ' . (string)$check['error'] : '';
+	$quiet = '<span class="text-muted">' . $h($checked . $err) . '</span>';
+	if (!empty($check['update_available']) && $latest !== null) {
+		$installed = (string)($check['installed'] ?? '');
+		$url = $check['release_url'] ?? null;
+		$link = is_string($url) && preg_match('#^https://github\.com/[A-Za-z0-9._/%+-]+\z#', $url) === 1
+		    ? ' <a href="' . $h($url) . '" target="_blank" rel="noopener">' . $h('Release notes') . '</a>' : '';
+		$btns = $can_update ? '<span class="pull-right">'
+		    . gd_status_update_form($action, 'update', 'btn-primary', 'fa-download', 'Update now') . ' '
+		    . gd_status_update_form($action, 'update_check', 'btn-default', 'fa-rotate', 'Check now') . '</span>' : '';
+		$out .= '<div class="alert alert-info clearfix" role="alert" id="gd-update">' . $btns
+		    . $h("Game Detect v{$latest} is available (installed v" . ($installed !== '' ? $installed : '?') . ').')
+		    . $link . ' ' . $quiet . '</div>';
+	} elseif ($can_update) {
+		$v = $ver($check['installed'] ?? null);
+		$out .= '<p class="text-muted small" id="gd-update">'
+		    . $h(($v !== null ? "Game Detect v{$v}. " : '') . $checked . $err) . ' '
+		    . gd_status_update_form($action, 'update_check', 'btn-default', 'fa-rotate', 'Check now') . '</p>';
+	}
+	return $out;
+}

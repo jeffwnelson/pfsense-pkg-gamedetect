@@ -8,9 +8,12 @@
  * ?format=json returns clients.json plus generated_at, daemon, and banner;
  * the Clients tab polls it every poll_interval seconds and rebuilds the
  * table body in place. Access is the page-status-gamedetect privilege.
- * POST act=reset_signatures (Signatures tab "Reset to defaults") also needs
- * the settings privilege (pkg_edit.php?xml=gamedetect.xml); csrf-magic
- * guards the POST.
+ * POST act=reset_signatures (Signatures tab "Reset to defaults"),
+ * act=update (Update now) and act=update_check (Check now) also need the
+ * settings privilege (pkg_edit.php?xml=gamedetect.xml), checked before any
+ * action runs (HTTP 403 otherwise); csrf-magic guards the POSTs. Every tab
+ * shows the update banner; while an update runs the page polls
+ * ?format=update_status every 3 s and reloads once when it finishes.
  */
 require_once('guiconfig.inc');
 require_once('/usr/local/pkg/gamedetect.inc');
@@ -30,22 +33,49 @@ function gamedetect_page_payload(array $daemon): array {
 
 $gd_daemon = gamedetect_status();
 $gd_reset_error = null;
+$gd_update_error = null;
+$gd_tabs = ['clients' => gettext('Clients'), 'unclassified' => gettext('Unclassified'), 'signatures' => gettext('Signatures')];
+$gd_tab = is_string($_GET['tab'] ?? null) && isset($gd_tabs[$_GET['tab']]) ? $_GET['tab'] : 'clients';
+$gd_can_settings = isAllowedPage('pkg_edit.php?xml=gamedetect.xml');
 
-if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['act'] ?? null) === 'reset_signatures') {
-	if (!isAllowedPage('pkg_edit.php?xml=gamedetect.xml')) {
-		http_response_code(403);
+/* Privilege first: a known act without the settings privilege does nothing but 403. */
+$gd_act = gd_update_post_action($_SERVER['REQUEST_METHOD'] ?? '', $_POST['act'] ?? null, $gd_can_settings);
+if ($gd_act === 'forbidden') {
+	http_response_code(403);
+	if (($_POST['act'] ?? null) === 'reset_signatures') {
 		$gd_reset_error = gettext('Resetting the signatures needs permission to change the Game Detect settings (Services > Game Detect).');
+		$gd_tab = 'signatures';
 	} else {
-		$gd_reset = gamedetect_reset_signatures(gamedetect_path('signatures'), gamedetect_path('default_signatures'));
-		if ($gd_reset['ok']) {
-			log_error('gamedetect: signatures reset to the shipped defaults'
-			    . ($gd_reset['backup'] !== null ? " (backup: {$gd_reset['backup']})" : ''));
-			header('Location: status_gamedetect.php?tab=signatures&reset=ok');
-			exit;
-		}
-		$gd_reset_error = gettext('Could not reset the signatures') . ': ' . $gd_reset['error'];
+		$gd_update_error = gettext('Updating Game Detect needs permission to change the Game Detect settings (Services > Game Detect).');
 	}
-	$_GET['tab'] = 'signatures';
+} elseif ($gd_act === 'reset_signatures') {
+	$gd_reset = gamedetect_reset_signatures(gamedetect_path('signatures'), gamedetect_path('default_signatures'));
+	if ($gd_reset['ok']) {
+		log_error('gamedetect: signatures reset to the shipped defaults'
+		    . ($gd_reset['backup'] !== null ? " (backup: {$gd_reset['backup']})" : ''));
+		header('Location: status_gamedetect.php?tab=signatures&reset=ok');
+		exit;
+	}
+	$gd_reset_error = gettext('Could not reset the signatures') . ': ' . $gd_reset['error'];
+	$gd_tab = 'signatures';
+}
+$gd_self = 'status_gamedetect.php' . ($gd_tab === 'clients' ? '' : '?tab=' . $gd_tab);
+if ($gd_act === 'update' || $gd_act === 'update_check') {
+	$gd_r = $gd_act === 'update' ? gamedetect_update_start() : gamedetect_update_check_now();
+	if ($gd_r['ok']) {
+		header('Location: ' . $gd_self);
+		exit;
+	}
+	$gd_update_error = $gd_r['error'];
+}
+
+if (($_GET['format'] ?? null) === 'update_status') {
+	$gd_run = gamedetect_update_status()['run'];
+	unset($gd_run['log']);
+	header('Content-Type: application/json');
+	header('Cache-Control: no-store');
+	echo json_encode($gd_run, JSON_UNESCAPED_SLASHES | JSON_PARTIAL_OUTPUT_ON_ERROR);
+	exit;
 }
 
 if (($_GET['format'] ?? null) === 'json') {
@@ -55,9 +85,8 @@ if (($_GET['format'] ?? null) === 'json') {
 	exit;
 }
 
-$gd_tabs = ['clients' => gettext('Clients'), 'unclassified' => gettext('Unclassified'), 'signatures' => gettext('Signatures')];
-$gd_tab = is_string($_GET['tab'] ?? null) && isset($gd_tabs[$_GET['tab']]) ? $_GET['tab'] : 'clients';
 $gd_banner = gd_status_banner($gd_daemon);
+$gd_update = gamedetect_update_status();
 
 $pgtitle = array(gettext('Status'), gettext('Game Detect'));
 include('head.inc');
@@ -68,6 +97,44 @@ foreach ($gd_tabs as $k => $label) {
 }
 display_top_tabs($tab_array);
 ?>
+<?php if ($gd_update_error !== null): ?>
+<div class="alert alert-danger" role="alert"><?=htmlspecialchars($gd_update_error)?></div>
+<?php endif; ?>
+<?=gd_status_update_html($gd_update['check'], $gd_update['run'], $gd_can_settings, $gd_self, time())?>
+<?php if ($gd_update['run']['state'] === 'running'): ?>
+<script type="text/javascript">
+//<![CDATA[
+events.push(function () {
+	var url = 'status_gamedetect.php?format=update_status';
+	var self = <?=json_encode($gd_self, JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)?>;
+	var stuck = <?=json_encode(gettext('The update is taking longer than expected; reload this page to check on it.'), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT)?>;
+	var polls = 0;
+
+	/* Poll every 3 s; reload once, without resubmitting, when the update is no longer running. */
+	function next() {
+		polls++;
+		if (polls <= 400) {
+			setTimeout(poll, 3000);
+		} else {
+			$('#gd-update-running').text(stuck);
+		}
+	}
+
+	function poll() {
+		$.ajax({url: url, dataType: 'json', cache: false}).done(function (d) {
+			if (d && typeof d === 'object' && typeof d.state === 'string' && d.state !== 'running') {
+				window.location.replace(self);
+				return;
+			}
+			next();
+		}).fail(next);
+	}
+
+	next();
+});
+//]]>
+</script>
+<?php endif; ?>
 <div id="gd-banner" class="alert alert-warning<?=$gd_banner === null ? ' hidden' : ''?>" role="alert"><?=htmlspecialchars((string)$gd_banner)?></div>
 <?php
 if ($gd_tab === 'clients'):
@@ -428,7 +495,7 @@ else:
 	$gd_sig_mtime = @filemtime($gd_sig_path);
 	$gd_sig_body = @file_get_contents($gd_sig_path, false, null, 0, 1048576);
 	$gd_sig_differs = gd_status_signatures_differ($gd_sig_path, gamedetect_path('default_signatures'));
-	$gd_can_reset = isAllowedPage('pkg_edit.php?xml=gamedetect.xml');
+	$gd_can_reset = $gd_can_settings;
 	$gd_sig_warn = null;
 	foreach ((array)($gd_daemon['warnings'] ?? []) as $w) {
 		if (is_string($w) && str_starts_with($w, 'signatures_invalid:')) {

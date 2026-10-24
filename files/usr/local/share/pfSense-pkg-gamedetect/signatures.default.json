@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "_notes": [
+    "Shipped defaults for pfSense-pkg-gamedetect. The live file is /usr/local/etc/gamedetect/signatures.json; edit that one, not this.",
+    "Format and authoring guide: docs/signatures.md in the package source.",
+    "Keys starting with _ are ignored by the loader.",
+    "Weights: dns 50-60, port_and_prefix 30-40, prefix 10-20, plain port 20-25. A plain port rule (not scoped to a prefix set) stays below low (30) so a broad range alone never labels a title (UDP 5060 SIP is not League, 3074 is not always Call of Duty); only a title-unique port may reach low alone (minecraft_bedrock 19132-19133, 35). dns+port reaches medium (dns 50) or high (dns 60); port+prefix reaches low.",
+    "Prefix sets are BGP-announced IPv4 prefixes of the publisher's own ASN (Valve publishes its list). Publishers that host on public clouds (Epic, EA, Activision, Mojang, NetEase overseas) have no prefix set on purpose: whole-cloud ranges would match everything.",
+    "No title claims UDP 443, so QUIC stays filtered.",
+    "Known limitation: marvel_rivals is NOT detectable from flow rules alone. Its port 9000-9999 rule is a weight-10 placeholder (below low), so it only shows when its DNS matches (60+10=70, medium); clients that bypass the resolver stay unknown.",
+    "Unverified DNS globs (guesses at what the client resolves in play, not captured): overwatch2, wow, cs2 (*.counter-strike.net), dota2 (*.dota2.com), apex, battlefield, marvel_rivals (*.easebar.com).",
+    "Roblox 49152-65535 is the OS ephemeral range, so it is a port_and_prefix rule on the roblox set: a plain port rule would let any WebRTC/P2P flow unlock the Roblox DNS points.",
+    "Riot voice (UDP 27016-27024, 54000-54012) is a port_and_prefix rule of the generic riot title on the riot set so it outscores the Valve 27000-27250 port rule on Riot IPs.",
+    "Publisher-generic titles (steam, riot) own the evidence every title of a publisher shares: its network, its port ranges and (riot) its launcher/anti-cheat DNS. The specific titles keep the same flow rules at weight 5 each (flow-only 10, never labelled) and are named by a game-specific dns rule (60). riot: Riot client and Vanguard names (*.riotgames.com, *.riotcdn.net, *.pvp.net, *.rgpub.io*) are resolved for LoL and Valorant alike, and LoL's game servers use 7000-8000 like Valorant (live: 192.207.0.5:7193), so port + prefix + generic dns = 60 is 'Riot game' (medium); lol/valorant also carry the generic dns rule (20) and win with their specific name: 60 + 20 + 10 = 90 vs 60. LoL's specific names: *.leagueoflegends.com and lolstatic*.akamaihd.net* (the cache shows the CNAME-flattened lolstatic-a.akamaihd.net.edgesuite.net). LoL vs Valorant is only told apart while the client holds a connection to a game-specific host.",
+    "Valve network traffic (UDP 27000-27250 and/or the valve prefix set) is shared by every Steam title that uses Steam Datagram Relay, so it scores the generic title steam (port 25 + prefix 15 = 40, low). cs2 and dota2 carry the same flow rules at weight 5 each (flow-only 10, never labelled) and are named only by their DNS rule (60; with the flow rules 70, which also stays > 10 ahead of source_engine's 55 when the client binds 27005): a TF2 or Deadlock player on the Valve network is 'Steam / Valve game', not 'Valve (Counter-Strike 2 or Dota 2)'.",
+    "dns_optional: a title with \"dns_optional\": true has no dns rule on purpose. steam: every PC with Steam open resolves the Steam domains, so they say nothing about what is being played. source_engine: community servers (TF2, GMod, CS:S, L4D2) are bare IPs on rented hosts with no DNS name.",
+    "source_engine keys on the Source client port: Source games bind UDP 27005 locally (clientport) and pf keeps it pre-NAT, so src_port 27005 alone is 40 (low) on any host; with a Source server or Valve relay port 27015-27150 (Source servers default to 27015+, Valve's SDR relay config uses 27015-27140) it is 55 (medium). It cannot tell TF2, GMod, CS:S or L4D2 apart. On a Valve relay (27015-27150) it scores 55 against steam 40, so the client port wins; on a relay port above 27150 both are 40 and the client is unknown.",
+    "False positives: an idle Steam client that keeps a UDP flow to the Valve network can read as 'Steam / Valve game' (low). A random local port that happens to be 27005 (e.g. after a second NAT in front of the client) gives a false 'Source engine game' (low).",
+    "Low-confidence entries (port data is secondhand or missing, tune from the Unclassified tab): fortnite port 9000-9100, lol/riot port 5000-5500 (Riot's old docs; live LoL used 7193), cod dst ports, battlefield ports, marvel_rivals port, wow (gameplay is TCP 1119/3724; UDP is voice only)."
+  ],
+  "_sources": [
+    {"checked": "2026-10-23", "for": "valorant,riot", "url": "https://support.riotgames.com/en-us/valorant/support-tools/how-to-set-up-port-forwarding", "says": "VALORANT game client UDP 7000-8000, 8180-8181; voice UDP 27016-27024 (NA/EU), 54000-54012 (AP/SE)"},
+    {"checked": "2026-10-23", "for": "lol,riot", "url": "https://community.sophos.com/utm-firewall/f/network-protection-firewall-nat-qos-ips/41362/port-forwarding-league-of-legends", "says": "Quotes the (since removed) Riot article: League game client UDP 5000-5500. No current official Riot page found."},
+    {"checked": "2026-10-23", "for": "riot,prefix_sets.riot", "url": "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS6507", "says": "IPv4 prefixes announced by AS6507 (Riot Games), collapsed. Riot publishes no list of its own."},
+    {"checked": "2026-10-23", "for": "fortnite", "url": "https://www.epicgames.com/help/en-US/c-Category_Fortnite/a000084740", "says": "Epic: unblock 80, 433, 443, 3478, 3479, 5060, 5062, 5222, 6250, 12000-65000 (too broad for a port rule). The 9000-9100 game-server range used here is community-observed, not from Epic."},
+    {"checked": "2026-10-23", "for": "rocketleague", "url": "https://support.rocketleague.com/hc/en-us/articles/360019215973-How-do-I-Setup-Port-Forwarding-on-my-Router-", "says": "Psyonix port forwarding article (403 to scripted fetch); UDP 7000-9000 per every secondary copy, e.g. https://www.nasef.org/rocket-league-it-help-page"},
+    {"checked": "2026-10-23", "for": "overwatch2,wow", "url": "https://us.forums.blizzard.com/en/sc2/t/how-to-put-in-ports-number-for-blizzard-games/7533", "says": "Blizzard staff repost of the withdrawn ports article: Overwatch UDP 3478-3479, 5060, 5062, 6250, 12000-64000; WoW TCP 3724, 1119"},
+    {"checked": "2026-10-23", "for": "wow", "url": "https://eu.forums.blizzard.com/en/wow/t/add-port-to-windows-firewall/401644", "says": "WoW 3724 TCP/UDP"},
+    {"checked": "2026-10-23", "for": "prefix_sets.blizzard", "url": "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS57976", "says": "IPv4 prefixes announced by AS57976 (Blizzard Entertainment), collapsed"},
+    {"checked": "2026-10-23", "for": "cs2,dota2,steam,prefix_sets.valve", "url": "https://help.steampowered.com/en/faqs/view/2EA8-4D75-DA21-31EB", "says": "Required Ports for Steam: game traffic UDP remote 27000-27250; SDR traffic is from the Valve network AS32590, list at https://as32590.net/ipv4.txt"},
+    {"checked": "2026-10-23", "for": "prefix_sets.valve", "url": "https://as32590.net/ipv4.txt", "says": "Valve's published IPv4 blocks (11 prefixes), copied verbatim"},
+    {"checked": "2026-10-23", "for": "cs2,dota2,steam", "url": "https://api.steampowered.com/ISteamApps/GetSDRConfig/v1/?appid=730", "says": "SDR relay config: 218 relays, port ranges within 27015-27140; western POPs all inside AS32590; China and some partner POPs (d*, ct*, pek*) are outside it and are not covered"},
+    {"checked": "2026-10-23", "for": "cod", "url": "https://support.activision.com/articles/en_US/FAQ/Ports-Used-for-Call-of-Duty-Games/", "says": "BO7/BO6/Warzone/MWIII/MWII PC UDP 3074, 3478, 4379-4380, 6112-6119, 20500, 20510, 27000-27031, 27036, 28960; Vanguard/BOCW PC UDP 3074-3079. These are forwarding (client-side) ports; server dst ports are not documented."},
+    {"checked": "2026-10-23", "for": "apex", "url": "https://afkgaming.com/esports/news/7255-how-to-fix-apex-legends-no-servers-found-error", "says": "Reproduces EA help: Apex PC UDP 1024-1124, 18000, 29900, 37000-40000. Official help.ea.com page not reachable."},
+    {"checked": "2026-10-23", "for": "battlefield", "url": "https://games.gg/battlefield-6/guides/battlefield-6-guide-multiplayer-verbindungsprobleme-beheben/", "says": "Third-party: Battlefield 6 PC UDP 3659, 14000-14016, 18000, 23000-24000 (18000 omitted: shared with Apex). No official EA list found."},
+    {"checked": "2026-10-23", "for": "roblox", "url": "https://en.help.roblox.com/hc/en-us/articles/203312880-General-Connection-Problems", "says": "Roblox: UDP 49152-65535 (page 403 to scripted fetch; range consistent across copies)"},
+    {"checked": "2026-10-23", "for": "prefix_sets.roblox", "url": "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS22697", "says": "IPv4 prefixes announced by AS22697 (ROBLOX-PRODUCTION), collapsed"},
+    {"checked": "2026-10-23", "for": "minecraft_bedrock", "url": "https://help.minecraft.net/hc/en-us/articles/360035131651-Dedicated-Servers-for-Minecraft-on-Bedrock", "says": "Bedrock Dedicated Server; default server-port 19132, server-portv6 19133 (UDP)"},
+    {"checked": "2026-10-23", "for": "marvel_rivals", "url": "https://www.gearupbooster.com/en/blog/solve-high-ping-in-marvel-rivals.html", "says": "Only claim found: 'UDP 3074, 9000-9999 are commonly needed' (third-party, unverified). NetEase AS45062 is mainland China only, so no prefix set."}
+  ],
+  "thresholds": {"high": 80, "medium": 50, "low": 30},
+  "publishers": {
+    "epic": "Epic Games",
+    "riot": "Riot Games",
+    "blizzard": "Blizzard",
+    "activision": "Activision",
+    "ea": "EA",
+    "valve": "Valve",
+    "source": "Source engine",
+    "roblox": "Roblox",
+    "mojang": "Mojang",
+    "netease": "NetEase"
+  },
+  "prefix_sets": {
+    "riot": ["43.229.64.0/22", "45.7.36.0/22", "45.250.208.0/22", "103.219.128.0/22", "103.240.224.0/22", "104.160.128.0/19", "138.0.12.0/22", "151.106.246.0/23", "151.106.248.0/22", "151.106.252.0/23", "151.106.254.0/24", "162.249.72.0/21", "185.40.64.0/22", "192.64.168.0/21", "192.207.0.0/24"],
+    "blizzard": ["5.42.160.0/20", "5.42.176.0/22", "24.105.0.0/22", "24.105.16.0/22", "24.105.25.0/24", "24.105.27.0/24", "24.105.28.0/22", "24.105.40.0/21", "24.105.50.0/23", "24.105.52.0/22", "24.105.56.0/21", "37.244.0.0/24", "37.244.2.0/23", "37.244.4.0/22", "37.244.8.0/23", "37.244.10.0/24", "37.244.13.0/24", "37.244.14.0/23", "37.244.16.0/23", "37.244.19.0/24", "37.244.20.0/24", "37.244.23.0/24", "37.244.24.0/21", "37.244.32.0/22", "37.244.36.0/23", "37.244.38.0/24", "37.244.40.0/22", "37.244.50.0/24", "37.244.52.0/22", "37.244.60.0/22", "59.153.40.0/22", "64.224.0.0/21", "64.224.24.0/21", "66.40.176.0/20", "103.4.114.0/23", "103.198.32.0/23", "117.52.6.0/24", "117.52.26.0/23", "117.52.33.0/24", "117.52.34.0/23", "117.52.36.0/23", "121.254.137.0/24", "121.254.206.0/23", "121.254.218.0/24", "137.221.64.0/19", "137.221.104.0/21", "137.221.112.0/24", "150.116.9.0/24", "158.115.192.0/20", "158.115.216.0/21", "182.162.31.0/24", "185.60.112.0/22", "198.74.32.0/22", "198.74.36.0/23", "202.9.66.0/23"],
+    "valve": ["45.121.184.0/22", "103.10.124.0/23", "103.28.54.0/23", "146.66.152.0/21", "155.133.224.0/19", "162.254.192.0/21", "185.25.180.0/22", "192.69.96.0/22", "205.196.6.0/24", "208.64.200.0/22", "208.78.164.0/22"],
+    "roblox": ["103.140.28.0/23", "128.116.0.0/17", "141.193.3.0/24", "205.201.62.0/24"]
+  },
+  "games": [
+    {"id": "fortnite", "name": "Fortnite", "publisher": "epic", "rules": [
+      {"type": "dns", "match": ["*.epicgames.com", "*.epicgames.dev", "*.ol.epicgames.com"], "weight": 60},
+      {"type": "port", "dst_ports": ["9000-9100"], "weight": 25}
+    ]},
+    {"id": "rocketleague", "name": "Rocket League", "publisher": "epic", "rules": [
+      {"type": "dns", "match": ["*.psyonix.com", "*.rl-cdn.com", "*.rocketleague.com"], "weight": 60},
+      {"type": "port", "dst_ports": ["7000-9000"], "weight": 25}
+    ]},
+    {"id": "riot", "name": "Riot game", "publisher": "riot", "rules": [
+      {"type": "dns", "match": ["*.riotgames.com", "*.riotcdn.net", "*.pvp.net", "*.rgpub.io*"], "weight": 20},
+      {"type": "port", "dst_ports": ["5000-5500", "7000-8000", "8180-8181"], "weight": 25},
+      {"type": "port_and_prefix", "dst_ports": ["27016-27024", "54000-54012"], "set": "riot", "weight": 20},
+      {"type": "prefix", "set": "riot", "weight": 15}
+    ]},
+    {"id": "valorant", "name": "Valorant", "publisher": "riot", "rules": [
+      {"type": "dns", "match": ["*.playvalorant.com", "*.valorant.*"], "weight": 60},
+      {"type": "dns", "match": ["*.riotgames.com", "*.riotcdn.net", "*.pvp.net", "*.rgpub.io*"], "weight": 20},
+      {"type": "port", "dst_ports": ["7000-8000", "8180-8181"], "weight": 5},
+      {"type": "prefix", "set": "riot", "weight": 5}
+    ]},
+    {"id": "lol", "name": "League of Legends", "publisher": "riot", "rules": [
+      {"type": "dns", "match": ["*.leagueoflegends.com", "lolstatic*.akamaihd.net*"], "weight": 60},
+      {"type": "dns", "match": ["*.riotgames.com", "*.riotcdn.net", "*.pvp.net", "*.rgpub.io*"], "weight": 20},
+      {"type": "port", "dst_ports": ["5000-5500", "7000-8000"], "weight": 5},
+      {"type": "prefix", "set": "riot", "weight": 5}
+    ]},
+    {"id": "overwatch2", "name": "Overwatch 2", "publisher": "blizzard", "rules": [
+      {"type": "dns", "match": ["*.playoverwatch.com", "overwatch.blizzard.com", "*.overwatch.blizzard.com"], "weight": 55},
+      {"type": "port_and_prefix", "dst_ports": ["12000-64000"], "set": "blizzard", "weight": 30},
+      {"type": "prefix", "set": "blizzard", "weight": 15}
+    ]},
+    {"id": "wow", "name": "World of Warcraft", "publisher": "blizzard", "rules": [
+      {"type": "dns", "match": ["*.worldofwarcraft.com", "worldofwarcraft.blizzard.com", "*.worldofwarcraft.blizzard.com"], "weight": 55},
+      {"type": "port", "dst_ports": ["3724"], "weight": 25},
+      {"type": "prefix", "set": "blizzard", "weight": 15}
+    ]},
+    {"id": "cod", "name": "Call of Duty", "publisher": "activision", "rules": [
+      {"type": "dns", "match": ["*.demonware.net", "*.callofduty.com", "*.activision.com"], "weight": 60},
+      {"type": "port", "dst_ports": ["3074-3079", "28960"], "weight": 25}
+    ]},
+    {"id": "apex", "name": "Apex Legends", "publisher": "ea", "rules": [
+      {"type": "dns", "match": ["*.respawn.com", "*.apexlegends.com"], "weight": 60},
+      {"type": "port", "dst_ports": ["37000-40000"], "weight": 25}
+    ]},
+    {"id": "battlefield", "name": "Battlefield", "publisher": "ea", "rules": [
+      {"type": "dns", "match": ["*.battlefield.com", "*.dice.se"], "weight": 60},
+      {"type": "port", "dst_ports": ["3659", "14000-14016", "23000-24000"], "weight": 25}
+    ]},
+    {"id": "cs2", "name": "Counter-Strike 2", "publisher": "valve", "rules": [
+      {"type": "dns", "match": ["*.counter-strike.net"], "weight": 60},
+      {"type": "port", "dst_ports": ["27000-27250"], "weight": 5},
+      {"type": "prefix", "set": "valve", "weight": 5}
+    ]},
+    {"id": "dota2", "name": "Dota 2", "publisher": "valve", "rules": [
+      {"type": "dns", "match": ["*.dota2.com"], "weight": 60},
+      {"type": "port", "dst_ports": ["27000-27250"], "weight": 5},
+      {"type": "prefix", "set": "valve", "weight": 5}
+    ]},
+    {"id": "steam", "name": "Steam / Valve game", "publisher": "valve", "dns_optional": true, "rules": [
+      {"type": "port", "dst_ports": ["27000-27250"], "weight": 25},
+      {"type": "prefix", "set": "valve", "weight": 15}
+    ]},
+    {"id": "source_engine", "name": "Source engine game", "publisher": "source", "dns_optional": true, "rules": [
+      {"type": "src_port", "src_ports": ["27005"], "weight": 40},
+      {"type": "port", "dst_ports": ["27015-27150"], "weight": 15}
+    ]},
+    {"id": "roblox", "name": "Roblox", "publisher": "roblox", "rules": [
+      {"type": "dns", "match": ["*.roblox.com", "*.rbxcdn.com"], "weight": 60},
+      {"type": "port_and_prefix", "dst_ports": ["49152-65535"], "set": "roblox", "weight": 35},
+      {"type": "prefix", "set": "roblox", "weight": 10}
+    ]},
+    {"id": "minecraft_bedrock", "name": "Minecraft (Bedrock)", "publisher": "mojang", "rules": [
+      {"type": "dns", "match": ["*.minecraft.net", "*.mojang.com", "*.minecraftservices.com"], "weight": 50},
+      {"type": "port", "dst_ports": ["19132-19133"], "weight": 35}
+    ]},
+    {"id": "marvel_rivals", "name": "Marvel Rivals", "publisher": "netease", "rules": [
+      {"type": "dns", "match": ["*.marvelrivals.com", "*.easebar.com"], "weight": 60},
+      {"type": "port", "dst_ports": ["9000-9999"], "weight": 10}
+    ]}
+  ]
+}

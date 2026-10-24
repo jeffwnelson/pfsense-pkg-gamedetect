@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "_sources": "test fixture",
+  "thresholds": {"high": 80, "medium": 50, "low": 30},
+  "prefix_sets": {
+    "epic": ["3.120.0.0/16"],
+    "riot": ["162.249.72.0/22"],
+    "valve": ["155.133.224.0/19"]
+  },
+  "games": [
+    {"id": "fortnite", "name": "Fortnite", "publisher": "epic", "rules": [
+      {"type": "dns", "match": ["*.epicgames.com"], "weight": 60},
+      {"type": "port", "dst_ports": ["9000-9100"], "weight": 30},
+      {"type": "prefix", "set": "epic", "weight": 10}
+    ]},
+    {"id": "rocketleague", "name": "Rocket League", "publisher": "epic", "rules": [
+      {"type": "dns", "match": ["*.psyonix.com"], "weight": 60},
+      {"type": "port", "dst_ports": ["7000-9000"], "weight": 30},
+      {"type": "prefix", "set": "epic", "weight": 10}
+    ]},
+    {"id": "valorant", "name": "Valorant", "publisher": "riot", "rules": [
+      {"type": "dns", "match": ["*.riotgames.com"], "weight": 60},
+      {"type": "port_and_prefix", "dst_ports": ["7000-8000"], "set": "riot", "weight": 40}
+    ]},
+    {"id": "cs2", "name": "Counter-Strike 2", "publisher": "valve", "rules": [
+      {"type": "dns", "match": ["*.steamserver.net"], "weight": 50},
+      {"type": "prefix", "set": "valve", "weight": 40}
+    ]}
+  ]
+}

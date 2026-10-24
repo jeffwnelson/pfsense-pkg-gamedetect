@@ -1,0 +1,15 @@
+#!/bin/sh
+# Copyright 2026 Jeff Nelson
+# Licensed under the Apache License, Version 2.0.
+# Fake /sbin/pfctl for daemon tests: only `pfctl -ss` is allowed.
+[ "$*" = "-ss" ] || { echo "fake pfctl: unexpected args: $*" >&2; exit 64; }
+# GD_FAKE_PFCTL_SLEEP: seconds to sleep first. GD_FAKE_PFCTL_SLEEP_FILE: a file
+# whose contents (if any) are the sleep, read per call so a test can change it
+# while the daemon runs.
+if [ -n "${GD_FAKE_PFCTL_SLEEP:-}" ]; then
+	sleep "$GD_FAKE_PFCTL_SLEEP"
+fi
+if [ -n "${GD_FAKE_PFCTL_SLEEP_FILE:-}" ] && [ -s "$GD_FAKE_PFCTL_SLEEP_FILE" ]; then
+	sleep "$(cat "$GD_FAKE_PFCTL_SLEEP_FILE")"
+fi
+cat "${GD_FAKE_PFCTL_FILE:-$(dirname "$0")/../pfctl_ss.txt}"

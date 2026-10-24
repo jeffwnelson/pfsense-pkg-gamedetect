@@ -1,0 +1,9 @@
+#!/bin/sh
+# Copyright 2026 Jeff Nelson
+# Licensed under the Apache License, Version 2.0.
+# Fake host(1): only `host -W 1 <ipv4>` is allowed; prints a fixed PTR answer.
+[ "$#" -eq 3 ] && [ "$1" = "-W" ] && [ "$2" = "1" ] || { echo "fake host: unexpected args: $*" >&2; exit 64; }
+if [ -n "${GD_FAKE_HOST_SLEEP:-}" ]; then
+	sleep "$GD_FAKE_HOST_SLEEP"
+fi
+echo "9.100.51.198.in-addr.arpa domain name pointer example.test."

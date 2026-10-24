@@ -1,0 +1,22 @@
+START_RRSET_CACHE
+;rrset 86400 1 0 7 3
+cdn.ol.epicgames.com.	120	IN	A	3.120.1.5
+;rrset 86400 1 0 8 3
+api.epicgames.com.	300	IN	CNAME	cdn.ol.epicgames.com.
+;rrset 86400 1 0 8 3
+hop1.chain.example.	300	IN	CNAME	hop2.chain.example.
+hop2.chain.example.	300	IN	CNAME	hop3.chain.example.
+hop3.chain.example.	300	IN	CNAME	final.chain.example.
+final.chain.example.	60	IN	A	9.9.9.9
+final.chain.example.	60	IN	A	9.9.9.10
+example.com.	3600	IN	AAAA	2606:4700::1
+.	518400	IN	NS	a.root-servers.net.
+com.	86400	IN	DNSKEY	257 3 13 abcdef==
+Mixed.Case.Example.	30	IN	A	8.8.4.4
+END_RRSET_CACHE
+START_MSG_CACHE
+msg api.epicgames.com. IN A 32896 1 300 0 1 1 1
+api.epicgames.com. IN CNAME 0
+junk.example.	10	IN	A	6.6.6.6
+END_MSG_CACHE
+EOF

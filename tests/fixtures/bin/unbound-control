@@ -1,0 +1,10 @@
+#!/bin/sh
+# Copyright 2026 Jeff Nelson
+# Licensed under the Apache License, Version 2.0.
+# Fake unbound-control: only `-c /var/unbound/unbound.conf dump_cache` is allowed.
+[ "$*" = "-c /var/unbound/unbound.conf dump_cache" ] || { echo "fake unbound-control: unexpected args: $*" >&2; exit 64; }
+if [ "${GD_FAKE_UNBOUND_FAIL:-}" = 1 ]; then
+	echo "error: connect: Connection refused" >&2
+	exit 1
+fi
+cat "$(dirname "$0")/../unbound_dump_cache.txt"

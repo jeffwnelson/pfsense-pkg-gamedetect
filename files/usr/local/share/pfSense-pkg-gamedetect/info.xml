@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<!-- Copyright 2026 Jeff Nelson. Licensed under the Apache License, Version 2.0. -->
+<pfsensepkgs>
+	<package>
+		<name>gamedetect</name>
+		<website>https://github.com/jeffwnelson/pfsense-pkg-gamedetect</website>
+		<descr><![CDATA[Shows which games attendee devices are playing, classified from firewall states and DNS]]></descr>
+		<version>%%PKGVERSION%%</version>
+		<configurationfile>gamedetect.xml</configurationfile>
+	</package>
+</pfsensepkgs>

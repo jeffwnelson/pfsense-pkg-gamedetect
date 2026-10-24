@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!DOCTYPE packagegui SYSTEM "../schema/packages.dtd">
+<?xml-stylesheet type="text/xsl" href="../xsl/package.xsl"?>
+<!-- Copyright 2026 Jeff Nelson. Licensed under the Apache License, Version 2.0. -->
+<packagegui>
+	<name>gamedetect</name>
+	<version>%%PKGVERSION%%</version>
+	<title>Services/Game Detect</title>
+	<include_file>/usr/local/pkg/gamedetect.inc</include_file>
+	<addedit_string>Game Detect: settings saved</addedit_string>
+	<delete_string>Game Detect: settings deleted</delete_string>
+	<menu>
+		<name>Game Detect</name>
+		<section>Services</section>
+		<url>/pkg_edit.php?xml=gamedetect.xml</url>
+	</menu>
+	<menu>
+		<name>Game Detect</name>
+		<section>Status</section>
+		<url>/status_gamedetect.php</url>
+	</menu>
+	<service>
+		<name>gamedetectd</name>
+		<rcfile>gamedetectd.sh</rcfile>
+		<description>Game Detect classifier</description>
+		<custom_php_service_status_command>(is_file('/var/run/gamedetectd.pid') &amp;&amp; ($gd_pid = (int)trim((string)@file_get_contents('/var/run/gamedetectd.pid'))) &gt; 0 &amp;&amp; @posix_kill($gd_pid, 0))</custom_php_service_status_command>
+	</service>
+	<fields>
+		<field>
+			<fielddescr>Enable</fielddescr>
+			<fieldname>enable</fieldname>
+			<description>Run the Game Detect classifier.</description>
+			<type>checkbox</type>
+			<default_value>on</default_value>
+		</field>
+		<field>
+			<fielddescr>Attendee interfaces</fielddescr>
+			<fieldname>attendee_networks</fieldname>
+			<description>Interfaces whose IPv4 network holds the attendee devices.</description>
+			<type>interfaces_selection</type>
+			<multiple/>
+			<default_value>lan</default_value>
+		</field>
+		<field>
+			<fielddescr>Additional attendee networks</fielddescr>
+			<fieldname>extra_cidrs</fieldname>
+			<description>Extra IPv4 CIDRs to treat as attendee networks, one per line (for example 10.20.0.0/16).</description>
+			<type>textarea</type>
+			<cols>40</cols>
+			<rows>4</rows>
+		</field>
+		<field>
+			<fielddescr>Poll interval</fielddescr>
+			<fieldname>poll_interval</fieldname>
+			<description>Seconds between state-table polls (2-60). Each poll is a snapshot of open connections; 60 is plenty for a LAN party.</description>
+			<type>input</type>
+			<default_value>60</default_value>
+		</field>
+		<field>
+			<fielddescr>Idle timeout</fielddescr>
+			<fieldname>idle_timeout</fieldname>
+			<description>Seconds without traffic before a client is no longer shown as playing (30-900). Keeps a player's last game shown through lobbies and map changes.</description>
+			<type>input</type>
+			<default_value>600</default_value>
+		</field>
+		<field>
+			<fielddescr>DNS cache refresh</fielddescr>
+			<fieldname>dns_refresh</fieldname>
+			<description>Seconds between Unbound DNS cache reads (10-300).</description>
+			<type>input</type>
+			<default_value>30</default_value>
+		</field>
+		<field>
+			<fielddescr>Reverse DNS</fielddescr>
+			<fieldname>rdns_enabled</fieldname>
+			<description>Look up reverse DNS names for unclassified destinations.</description>
+			<type>checkbox</type>
+			<default_value>on</default_value>
+		</field>
+		<field>
+			<fielddescr>Unclassified list size</fielddescr>
+			<fieldname>unknown_list_size</fieldname>
+			<description>Most-active unclassified destinations kept for review (10-500).</description>
+			<type>input</type>
+			<default_value>50</default_value>
+		</field>
+	</fields>
+	<custom_php_validation_command>
+	<![CDATA[
+		gamedetect_validate_input($_POST, $input_errors);
+	]]>
+	</custom_php_validation_command>
+	<custom_php_resync_config_command>
+	<![CDATA[
+		gamedetect_resync();
+	]]>
+	</custom_php_resync_config_command>
+	<custom_php_install_command>
+	<![CDATA[
+		gamedetect_resync();
+	]]>
+	</custom_php_install_command>
+	<custom_php_deinstall_command>
+	<![CDATA[
+		gamedetect_deinstall();
+	]]>
+	</custom_php_deinstall_command>
+</packagegui>

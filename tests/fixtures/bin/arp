@@ -1,0 +1,6 @@
+#!/bin/sh
+# Copyright 2026 Jeff Nelson
+# Licensed under the Apache License, Version 2.0.
+# Fake /usr/sbin/arp: only `arp -an` is allowed.
+[ "$*" = "-an" ] || { echo "fake arp: unexpected args: $*" >&2; exit 64; }
+cat "$(dirname "$0")/../arp_an.txt"

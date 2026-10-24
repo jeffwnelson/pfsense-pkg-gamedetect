@@ -371,3 +371,38 @@ $e = gd_update_exec(['/bin/sleep', '5'], 1);
 assert_true($e['timed_out'] === true && microtime(true) - $t0 < 4, 'exec kills after the timeout');
 $e = gd_update_exec(['/bin/echo', '$(id); rm -rf /'], 5);
 assert_eq("\$(id); rm -rf /\n", $e['output'], 'exec passes arguments verbatim, no shell');
+
+/* exec: a child that closes its output and keeps running is still killed at the deadline */
+$t0 = microtime(true);
+$e = gd_update_exec(['/bin/sh', '-c', 'exec >/dev/null 2>&1; sleep 5'], 1);
+assert_true($e['timed_out'] === true && microtime(true) - $t0 < 4, 'exec times out a child that closed stdout (no blocking proc_close)');
+$e = gd_update_exec(['/bin/sh', '-c', 'exec >/dev/null 2>&1; exit 4'], 5);
+assert_eq([4, false], [$e['rc'], $e['timed_out']], 'exec exit status after the child closed stdout');
+
+/* http: fails closed without the curl extension (no stream-wrapper fallback) */
+$dest = "$tmp/nocurl.pkg";
+$r = gd_update_http_get('https://github.com/x', 'ua', 5, 100, $dest, [], false);
+assert_true($r['ok'] === false && $r['error'] === 'PHP curl extension required', 'http without curl -> "PHP curl extension required"');
+assert_true(!file_exists($dest), 'http without curl writes nothing');
+assert_eq(false, gd_update_http_get('http://github.com/x', 'ua', 5, 100)['ok'], 'http refuses a non-https URL');
+
+/* url_ok: percent-encoding is not allowed (no %2e%2e%2f traversal) */
+$x = $release;
+$x['assets'][1]['browser_download_url'] = 'https://github.com/' . REPO . '/releases/download/v0.3.0%2f%2e%2e%2f%2e%2e%2fx/pfSense-pkg-gamedetect-0.3.0-fbsd16.pkg';
+assert_eq(false, gd_update_parse_release($x, REPO, 16)['ok'], 'parse_release refuses %2e%2e%2f in the asset url');
+assert_eq(false, gd_update_url_ok(DL . '%2e%2e%2fpfSense-pkg-gamedetect-0.3.0-fbsd16.pkg', REPO, 'pfSense-pkg-gamedetect-0.3.0-fbsd16.pkg'), 'url_ok refuses percent-encoding');
+
+/* check: GitHub rate limiting is reported plainly */
+foreach ([403, 429] as $code) {
+	$s = gd_update_check(array_merge($opts, ['state_path' => "$tmp/db4/update.json",
+	    'fetch' => fn($u, $m) => ['ok' => false, 'body' => '', 'error' => "HTTP $code", 'status' => $code]]));
+	assert_eq('GitHub rate limit reached, try again later', $s['error'], "check HTTP $code from api.github.com -> rate limit message");
+}
+
+/* effective state: update_available follows the version installed now, not the stored bool */
+$stored = ['installed' => '0.2.0', 'latest' => '0.3.0', 'update_available' => true];
+assert_eq(['installed' => '0.3.0', 'latest' => '0.3.0', 'update_available' => false], gd_update_effective($stored, '0.3.0'), 'effective: manual upgrade to latest -> not available');
+assert_eq(true, gd_update_effective($stored, '0.2.0')['update_available'], 'effective: still older -> available');
+assert_eq(true, gd_update_effective(['latest' => '0.3.0', 'update_available' => false], '0.2.0')['update_available'], 'effective: stale false recomputed true');
+assert_eq(false, gd_update_effective(['latest' => 'x', 'update_available' => true], '0.2.0')['update_available'], 'effective: invalid latest -> not available');
+assert_eq(false, gd_update_effective([], '0.2.0')['update_available'], 'effective: no state -> not available');

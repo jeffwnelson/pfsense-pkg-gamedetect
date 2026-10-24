@@ -42,7 +42,8 @@ function gd_update_download_prefix(string $repo): string {
 /*
  * True when $url is a release download of $name in $repo: under the
  * releases/download/ prefix, ending in "/<name>", with one tag path segment
- * and no characters outside a conservative URL set.
+ * and no characters outside a conservative URL set (no percent-encoding, so
+ * no encoded "../").
  */
 function gd_update_url_ok($url, string $repo, string $name): bool {
 	if (!is_string($url) || !gd_update_valid_repo($repo)) {
@@ -53,7 +54,7 @@ function gd_update_url_ok($url, string $repo, string $name): bool {
 		return false;
 	}
 	$rest = substr($url, strlen($prefix));
-	return preg_match('#^[A-Za-z0-9._%+-]+/[A-Za-z0-9._%+-]+\z#', $rest) === 1
+	return preg_match('#^[A-Za-z0-9._+-]+/[A-Za-z0-9._+-]+\z#', $rest) === 1
 	    && !str_contains($rest, '..')
 	    && str_ends_with($rest, '/' . $name);
 }
@@ -186,6 +187,18 @@ function gd_update_info_version(string $path): ?string {
 	return gd_update_semver($m[1]);
 }
 
+/*
+ * update.json as it applies now: installed set to $installed and
+ * update_available recomputed from it and latest (the stored bool goes stale
+ * after a manual upgrade).
+ */
+function gd_update_effective(array $check, string $installed): array {
+	$check['installed'] = $installed;
+	$latest = gd_update_semver($check['latest'] ?? null);
+	$check['update_available'] = $latest !== null && gd_update_is_newer($installed, $latest);
+	return $check;
+}
+
 /* gd_write_json_atomic(), creating the directory first. */
 function gd_update_write(string $path, array $data): bool {
 	$dir = dirname($path);
@@ -198,7 +211,8 @@ function gd_update_write(string $path, array $data): bool {
 /*
  * One update check. $o: repo, major (int), installed (version string),
  * state_path (update.json), fetch (callable(string $url, int $max_bytes):
- * array{ok, body, error}), now (unix time, optional). Writes and returns
+ * array{ok, body, error, status}), now (unix time, optional). HTTP 403/429
+ * from the API is reported as GitHub rate limiting. Writes and returns
  * {checked_at, installed, latest, update_available, release_url, notes,
  * asset_url, asset_name, sha256, error}. On failure error is set and the
  * previous release fields are kept; update_available is recomputed from the
@@ -237,6 +251,9 @@ function gd_update_check(array $o): array {
 	$fetch = $o['fetch'];
 	$res = $fetch("https://api.github.com/repos/{$repo}/releases/latest", GD_UPDATE_API_MAX);
 	if (empty($res['ok'])) {
+		if (in_array((int)($res['status'] ?? 0), [403, 429], true)) {
+			return $finish('GitHub rate limit reached, try again later');
+		}
 		return $finish('cannot fetch the latest release: ' . (string)($res['error'] ?? 'unknown error'));
 	}
 	$rel = json_decode((string)($res['body'] ?? ''), true);
@@ -451,7 +468,8 @@ function gd_update_post_action($method, $act, bool $can_settings): string {
 
 /*
  * Run $argv (array, no shell) with stdin from /dev/null, stdout+stderr
- * captured, killed after $timeout seconds. $env replaces the environment
+ * captured, killed (SIGKILL) after $timeout seconds, including a child that
+ * closed its output but is still running. $env replaces the environment
  * when given. Returns ['rc' => int (-1 on failure/timeout), 'output' => string,
  * 'timed_out' => bool]; output is capped at the last 1 MB.
  */
@@ -465,7 +483,8 @@ function gd_update_exec(array $argv, int $timeout, ?array $env = null): array {
 	$out = '';
 	$deadline = microtime(true) + $timeout;
 	$timed_out = false;
-	while (true) {
+	$open = true;
+	while ($open) {
 		$left = $deadline - microtime(true);
 		if ($left <= 0) {
 			$timed_out = true;
@@ -480,27 +499,48 @@ function gd_update_exec(array $argv, int $timeout, ?array $env = null): array {
 		if ($n > 0) {
 			$chunk = fread($pipes[1], 65536);
 			if ($chunk === false || ($chunk === '' && feof($pipes[1]))) {
-				break;
+				$open = false;
+			} else {
+				$out = gd_update_tail($out . $chunk, 1048576);
 			}
-			$out = gd_update_tail($out . $chunk, 1048576);
 		}
+	}
+	fclose($pipes[1]);
+	/* Output closed is not exited: wait for the exit (proc_close would block) up to the deadline. */
+	$rc = -1;
+	while (!$timed_out) {
+		$st = proc_get_status($p);
+		if (!$st['running']) {
+			$rc = (int)$st['exitcode'];
+			break;
+		}
+		if (microtime(true) >= $deadline) {
+			$timed_out = true;
+			break;
+		}
+		usleep(50000);
 	}
 	if ($timed_out) {
 		proc_terminate($p, 9);
 	}
-	fclose($pipes[1]);
-	$rc = proc_close($p);
+	proc_close($p);
 	return ['rc' => $timed_out ? -1 : $rc, 'output' => $out, 'timed_out' => $timed_out];
 }
 
 /*
  * HTTPS GET of $url with a User-Agent, following up to 5 redirects (HTTPS
- * only with curl), $timeout seconds overall, at most $max bytes. The body is
- * returned, or written to $dest when given. Uses the curl extension when
- * loaded, else the https:// stream wrapper. Returns ['ok', 'body', 'error'].
+ * only), $timeout seconds overall, at most $max bytes. The body is returned,
+ * or written to $dest when given. Needs PHP's curl extension: there is
+ * deliberately no stream-wrapper fallback, because that would follow a
+ * redirect to plain http:// and let a man in the middle serve both
+ * SHA256SUMS and the package. $have_curl is for tests only. Returns
+ * ['ok', 'body', 'error', 'status' (HTTP code, 0 if none)].
  */
-function gd_update_http_get(string $url, string $ua, int $timeout, int $max, ?string $dest = null, array $headers = []): array {
-	$fail = fn(string $e): array => ['ok' => false, 'body' => '', 'error' => $e];
+function gd_update_http_get(string $url, string $ua, int $timeout, int $max, ?string $dest = null, array $headers = [], ?bool $have_curl = null): array {
+	$fail = fn(string $e, int $code = 0): array => ['ok' => false, 'body' => '', 'error' => $e, 'status' => $code];
+	if (!($have_curl ?? function_exists('curl_init'))) {
+		return $fail('PHP curl extension required');
+	}
 	if (!str_starts_with($url, 'https://')) {
 		return $fail('not an https URL');
 	}
@@ -525,71 +565,37 @@ function gd_update_http_get(string $url, string $ua, int $timeout, int $max, ?st
 	};
 	$headers[] = 'User-Agent: ' . $ua;
 	$error = null;
-	if (function_exists('curl_init')) {
-		$ch = curl_init($url);
-		$opts = [
-		    CURLOPT_FOLLOWLOCATION => true,
-		    CURLOPT_MAXREDIRS => 5,
-		    CURLOPT_CONNECTTIMEOUT => min(10, $timeout),
-		    CURLOPT_TIMEOUT => $timeout,
-		    CURLOPT_HTTPHEADER => $headers,
-		    CURLOPT_SSL_VERIFYPEER => true,
-		    CURLOPT_SSL_VERIFYHOST => 2,
-		    CURLOPT_WRITEFUNCTION => fn($c, string $chunk): int => $sink($chunk) ? strlen($chunk) : 0,
-		];
-		if (defined('CURLOPT_PROTOCOLS_STR')) {
-			$opts[CURLOPT_PROTOCOLS_STR] = 'https';
-			$opts[CURLOPT_REDIR_PROTOCOLS_STR] = 'https';
-		} else {
-			$opts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTPS;
-			$opts[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTPS;
-		}
-		curl_setopt_array($ch, $opts);
-		$ok = curl_exec($ch);
-		$code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-		if ($over) {
-			$error = "response larger than {$max} bytes";
-		} elseif ($ok === false) {
-			$error = curl_error($ch) ?: 'request failed';
-		} elseif ($code !== 200) {
-			$error = "HTTP {$code}";
-		}
-		unset($ch);
+	$ch = curl_init($url);
+	$opts = [
+	    CURLOPT_FOLLOWLOCATION => true,
+	    CURLOPT_MAXREDIRS => 5,
+	    CURLOPT_CONNECTTIMEOUT => min(10, $timeout),
+	    CURLOPT_TIMEOUT => $timeout,
+	    CURLOPT_HTTPHEADER => $headers,
+	    CURLOPT_SSL_VERIFYPEER => true,
+	    CURLOPT_SSL_VERIFYHOST => 2,
+	    CURLOPT_WRITEFUNCTION => fn($c, string $chunk): int => $sink($chunk) ? strlen($chunk) : 0,
+	];
+	if (defined('CURLOPT_PROTOCOLS_STR')) {
+		$opts[CURLOPT_PROTOCOLS_STR] = 'https';
+		$opts[CURLOPT_REDIR_PROTOCOLS_STR] = 'https';
 	} else {
-		$ctx = stream_context_create([
-		    'http' => ['method' => 'GET', 'timeout' => $timeout, 'follow_location' => 1, 'max_redirects' => 6,
-		        'header' => implode("\r\n", $headers) . "\r\n", 'ignore_errors' => true],
-		    'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
-		]);
-		$deadline = microtime(true) + $timeout;
-		$in = @fopen($url, 'rb', false, $ctx);
-		if ($in === false) {
-			$error = 'request failed';
-		} else {
-			$code = 0;
-			foreach ((array)(stream_get_meta_data($in)['wrapper_data'] ?? []) as $h) {
-				if (is_string($h) && preg_match('#^HTTP/\S+\s+(\d{3})#', $h, $m) === 1) {
-					$code = (int)$m[1];
-				}
-			}
-			if ($code !== 200) {
-				$error = "HTTP {$code}";
-			}
-			while ($error === null && !feof($in)) {
-				$chunk = fread($in, 65536);
-				if ($chunk === false) {
-					$error = 'read failed';
-				} elseif (!$sink($chunk)) {
-					$error = $over ? "response larger than {$max} bytes" : 'write failed';
-				} elseif (microtime(true) > $deadline) {
-					$error = 'timed out';
-				}
-			}
-			fclose($in);
-		}
+		$opts[CURLOPT_PROTOCOLS] = CURLPROTO_HTTPS;
+		$opts[CURLOPT_REDIR_PROTOCOLS] = CURLPROTO_HTTPS;
 	}
+	curl_setopt_array($ch, $opts);
+	$ok = curl_exec($ch);
+	$code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+	if ($over) {
+		$error = "response larger than {$max} bytes";
+	} elseif ($ok === false) {
+		$error = curl_error($ch) ?: 'request failed';
+	} elseif ($code !== 200) {
+		$error = "HTTP {$code}";
+	}
+	unset($ch);
 	if ($fh !== null && !fclose($fh) && $error === null) {
 		$error = 'write failed';
 	}
-	return $error === null ? ['ok' => true, 'body' => $body, 'error' => null] : $fail($error);
+	return $error === null ? ['ok' => true, 'body' => $body, 'error' => null, 'status' => $code] : $fail($error, $code);
 }

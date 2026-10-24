@@ -29,7 +29,7 @@ jobs:
           release: "15.1"
           usesh: true
           envs: VER
-          prepare: pkg install -y hs-ShellCheck node php85 php85-extensions php85-pcntl libxml2
+          prepare: pkg install -y hs-ShellCheck node php85 php85-extensions php85-mbstring php85-pcntl libxml2
           run: |
             set -e
             sh tests/run.sh

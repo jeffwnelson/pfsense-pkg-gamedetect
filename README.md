@@ -138,6 +138,7 @@ changed. The first results appear after the first poll.
 | DNS cache refresh | 30 s (10-300) | Seconds between reads of the Unbound cache. Raise it on a very busy resolver if the dump is slow. |
 | Reverse DNS | on | Looks up reverse DNS names for unclassified destinations (bounded: 20 lookups and 1 s per poll, cached for an hour). Turn it off if you do not want those lookups. |
 | Unclassified list size | 50 (10-500) | How many unclassified destinations the Unclassified tab keeps. |
+| Update check | on | Checks GitHub once a day for a new release and shows it on the status page. Never installs anything by itself; see [Updating](#updating). |
 
 Saving applies the settings immediately (the daemon reloads; no restart).
 
@@ -251,10 +252,52 @@ A tiny example title:
 The rule format, scoring, weight policy and a step-by-step guide to adding a
 game from the Unclassified tab are in [docs/signatures.md](docs/signatures.md).
 
-## Upgrade
+## Updating
 
-Run the same `pkg add` command with the newer package (the `latest` URL
-always points at the newest release):
+### From the status page
+
+Once a day (at a random minute between 04:00 and 04:59) the firewall asks
+GitHub whether a newer release exists. When one does, every tab of
+**Status > Game Detect** shows:
+
+```
+Game Detect v0.3.0 is available (installed v0.2.0). Release notes    [Update now] [Check now]
+```
+
+- **Release notes** opens the release page on GitHub.
+- **Update now** downloads the package built for your pfSense (FreeBSD 15
+  or 16), checks it against the release's `SHA256SUMS`, and installs it
+  with `pkg add -f`. It runs in the background: the banner shows
+  "Updating to v0.3.0", the page reloads by itself when it is done, and
+  then shows the result (on failure with the updater output). Settings,
+  client history and an edited signature file are kept, exactly as with
+  a manual upgrade.
+- **Check now** runs the check immediately (it takes a few seconds).
+
+The buttons are only shown to users with the **WebCfg - Services: Game
+Detect** privilege; others see the notice only. When no update is
+available those users see a small "Last checked" line with **Check now**,
+and any check error is shown there.
+
+Nothing is ever installed without someone clicking **Update now**. The
+check contacts only GitHub: `api.github.com` for the latest release and
+`github.com` for its `SHA256SUMS` file (GitHub serves release files from
+its download host, `*.githubusercontent.com`). **Update now** downloads
+the package from the same place. The request carries a
+`User-Agent: pfSense-pkg-gamedetect/<version>` header and nothing else
+about your firewall.
+
+To turn the daily check off, untick **Update check** in **Services > Game
+Detect** and save; the cron job is removed. **Check now** still works.
+
+The release source is the `GAMEDETECT_UPDATE_REPO` constant in
+`/usr/local/pkg/gamedetect.inc`; a fork changes it there.
+
+### Manually with pkg add
+
+The `pkg add` command from [Install](#install) still works and is what to
+use on a firewall without internet access. Run it with the newer package
+(the `latest` URL always points at the newest release):
 
 ```sh
 pkg add https://github.com/jeffwnelson/pfsense-pkg-gamedetect/releases/latest/download/pfSense-pkg-gamedetect-fbsd16.pkg
@@ -263,6 +306,8 @@ pkg add https://github.com/jeffwnelson/pfsense-pkg-gamedetect/releases/latest/do
 The daemon is restarted on the new code, your settings are kept, the client
 history in `/var/db/gamedetect` is kept, and an unedited signature file is
 refreshed to the new defaults.
+
+### After a pfSense upgrade
 
 After upgrading pfSense itself, check that Game Detect is still installed
 and re-run the install command if it is missing: unofficial packages are not
@@ -275,8 +320,9 @@ pfSense configuration and come back with the package.
 pkg delete pfSense-pkg-gamedetect
 ```
 
-This stops the daemon and removes the menus, the service entry, the package
-registration, the program files and the data in `/var/db/gamedetect`. Your
+This stops the daemon and removes the menus, the service entry, the daily
+update-check cron job, the package registration, the program files and the
+data in `/var/db/gamedetect` (including the update status files). Your
 `/usr/local/etc/gamedetect/signatures.json` (and any `.bak` copies) is kept;
 delete `/usr/local/etc/gamedetect` by hand if you do not want it.
 
@@ -297,12 +343,20 @@ over 60 s. Details in [docs/testing.md](docs/testing.md#measured-results).
   resolver already cached, MAC addresses from the ARP table and DHCP
   hostnames. Packet payloads are never read, and DNS query logging is never
   turned on.
-- Nothing leaves the firewall. There is no telemetry and no outbound
-  connection, except the optional reverse DNS lookups, which go to the
-  firewall's configured DNS servers.
+- Nothing about your network leaves the firewall. There is no telemetry.
+  The only outbound connections are the optional reverse DNS lookups,
+  which go to the firewall's configured DNS servers, and the daily update
+  check (on by default, see [Updating](#updating)), which contacts only
+  GitHub (`api.github.com` and `github.com` release downloads) and sends
+  nothing but a `User-Agent` with the installed version.
+- Updates are installed only when an administrator clicks **Update now**.
+  The download is checked against the release's `SHA256SUMS`; that
+  catches a corrupted or truncated download, but since both come from the
+  same GitHub release it does not protect against a compromised release.
 - The status page and JSON endpoint are visible to pfSense users with the
-  **WebCfg - Status: Game Detect** privilege; the settings and **Reset to
-  defaults** need **WebCfg - Services: Game Detect**.
+  **WebCfg - Status: Game Detect** privilege; the settings, **Reset to
+  defaults**, **Update now** and **Check now** need **WebCfg - Services:
+  Game Detect**.
 - No user input reaches a shell: external commands run from a fixed script
   with argument arrays, and settings are validated (interface names and
   IPv4 CIDRs only).

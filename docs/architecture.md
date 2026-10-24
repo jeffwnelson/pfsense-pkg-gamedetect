@@ -209,10 +209,13 @@ is parsed and validated as a whole:
 | `/usr/local/libexec/gamedetect/collect.sh` | The only place external commands are spelled out (`states`, `dns`, `arp`, `rdns <ipv4>`). |
 | `/usr/local/libexec/gamedetect/prefilter.awk` | The `pfctl -ss` prefilter. |
 | `/usr/local/libexec/gamedetect/leases.php` | Prints `{ip: hostname}` JSON from the DHCP leases. |
+| `/usr/local/libexec/gamedetect/update-check.php` | Update check (cron and Check now): writes `update.json`. |
+| `/usr/local/libexec/gamedetect/update-run.php` | Updater (Update now): download, verify, `pkg add -f`. |
 | `/usr/local/pkg/gamedetect.xml` | Package descriptor and settings form. |
-| `/usr/local/pkg/gamedetect.inc` | pfSense glue: validation, conf and rc script, start/reload/stop. |
+| `/usr/local/pkg/gamedetect.inc` | pfSense glue: validation, conf and rc script, start/reload/stop, updater wiring. |
+| `/usr/local/pkg/gamedetect_update_lib.inc` | Updater core: release parsing, checksums, check and run steps, lock. |
 | `/usr/local/pkg/gamedetect_lib.inc` | Pure functions: parsers, loader, classifier, aggregator. |
-| `/usr/local/pkg/gamedetect_status_lib.inc` | Status page helpers (rows, banner, reset). |
+| `/usr/local/pkg/gamedetect_status_lib.inc` | Status page helpers (rows, banners, reset). |
 | `/usr/local/www/status_gamedetect.php` | Status > Game Detect and the JSON endpoint. |
 | `/etc/inc/priv/gamedetect.priv.inc` | Page privileges. |
 | `/usr/local/share/pfSense-pkg-gamedetect/signatures.default.json` | Shipped default signatures (read-only seed). |
@@ -221,7 +224,8 @@ is parsed and validated as a whole:
 | `/usr/local/etc/gamedetect/gamedetectd.conf` | Daemon conf (JSON), generated from the settings. |
 | `/usr/local/etc/rc.d/gamedetectd.sh` | rc script, generated at resync. |
 | `/var/run/gamedetectd.pid` | Daemon pid. |
-| `/var/db/gamedetect/` | `clients.json`, `unknown.json`, `daemon.json`, `signatures.lastgood.json`. |
+| `/var/run/gamedetect-update.lock` | Pid of a running updater. |
+| `/var/db/gamedetect/` | `clients.json`, `unknown.json`, `daemon.json`, `signatures.lastgood.json`, `update.json`, `update-run.json`. |
 
 ## Daemon behaviour
 
@@ -363,13 +367,19 @@ runs with all defaults (enabled, reverse DNS on, attendee interface LAN).
 | DNS cache refresh | 10-300 s | 30 | Seconds between Unbound cache reads. |
 | Reverse DNS | checkbox | on | Look up PTR names for unclassified destinations. |
 | Unclassified list size | 10-500 | 50 | Destinations kept in `unknown.json`. |
+| Update check | checkbox | on | Daily update-check cron job (see [Self-updater](#self-updater)). |
 
 At least one attendee interface or CIDR is required. Saving writes
 `gamedetectd.conf` (attendee CIDRs resolved from the interfaces, the
 firewall's own interface addresses as `local_ips`, and the values above),
 regenerates the rc script, then sends a running daemon SIGHUP, starts a
-stopped one, or stops it when disabled. Install never changes firewall
-rules, NAT or Unbound configuration.
+stopped one, or stops it when disabled, and installs or removes the
+update-check cron job. Install never changes firewall rules, NAT or
+Unbound configuration.
+
+**Update check** is also treated as on for a configuration saved before
+the field existed (v0.2.x), where the key is absent; `pkg_edit.php`
+stores an unticked box as an empty value, which turns it off.
 
 The 60 s poll default (since v0.1.3; it was 5 s) catches a game switch
 within a minute at a twelfth of the CPU of a 5 s poll; the 600 s idle
@@ -386,16 +396,23 @@ changes. Existing installs keep their saved values.
   networks must be configured interface names or IPv4 CIDRs. Anything else
   (for example `10.0.0.0/8; id`) is rejected and never reaches the conf.
 - **No payload inspection.** The daemon reads only the state table, the DNS
-  cache, the ARP table and DHCP leases. Nothing leaves the firewall.
+  cache, the ARP table and DHCP leases. Nothing about the network leaves
+  the firewall; the only outbound traffic besides optional rDNS is the
+  update check to GitHub (below).
 - **Web UI.** All output is escaped (`htmlspecialchars` server-side, an
   equivalent escaper in the page script). Viewing the page and the JSON
   needs `page-status-gamedetect` ("WebCfg - Status: Game Detect"); the
   settings page needs `page-services-gamedetect` ("WebCfg - Services: Game
   Detect"). **Reset to defaults** is a POST guarded by pfSense's CSRF token
   and also needs the settings privilege (else HTTP 403); it is done in PHP
-  (backup, temp file, rename), with no shell.
+  (backup, temp file, rename), with no shell. **Update now** and **Check
+  now** follow the same rules.
 - **Privileges.** The daemon runs as root, as pfSense package daemons do,
   because `pfctl -ss` and `unbound-control` need it.
+- **Updates.** See [Self-updater](#self-updater): nothing is installed
+  without an administrator's click, the updater takes no input from the
+  request, and downloads are pinned to the repo's release URLs and
+  checked against the release's `SHA256SUMS`.
 
 ## Performance
 
@@ -449,16 +466,132 @@ changes. Existing installs keep their saved values.
   to `?tab=signatures&reset=ok`. The daemon picks the file up on its next
   poll.
 - **Uninstall** (`pkg-deinstall.sh`): DEINSTALL runs `rc.packages ...
-  DEINSTALL` (stop the daemon, remove the rc script and the data dir);
+  DEINSTALL` (stop the daemon, remove the rc script, the data dir, the
+  update-check cron job and the update lock);
   POST-DEINSTALL runs `rc.packages ... POST-DEINSTALL`, which removes the
   menu, service and package registration from the config, and removes
-  `/var/db/gamedetect`. `signatures.json` (operator data), its backups and
+  `/var/db/gamedetect` and `/var/run/gamedetect-update.lock`.
+  `signatures.json` (operator data), its backups and
   `gamedetectd.conf` are kept. When pkg runs the deinstall hooks as part of
-  an upgrade (`PKG_UPGRADE` set), `/var/db/gamedetect` is kept, both in the
-  shell hook and in `gamedetect_deinstall()`.
+  an upgrade (`PKG_UPGRADE` set), `/var/db/gamedetect`, the cron job and
+  the lock are kept, both in the shell hook and in `gamedetect_deinstall()`.
 - The service status check in `gamedetect.xml` is a self-contained
   expression (pid file + signal 0), because Status > Services evaluates it
   without loading the package include.
+
+## Self-updater
+
+Check automatically, install only on click.
+
+**Check** (`update-check.php`, `gamedetect_update_check()` ->
+`gd_update_check()`). Run daily by a cron job that `gamedetect_resync()`
+installs with pfSense's `install_cron_job()` (`/usr/local/bin/php -f
+/usr/local/libexec/gamedetect/update-check.php`, hour 4, a random minute
+chosen once and then kept so resyncs do not rewrite `config.xml`), and
+synchronously by **Check now** (killed after 15 s). The job is removed when
+**Update check** is off and on package removal (kept during an upgrade,
+where the post-install resync re-asserts it).
+
+1. GET `https://api.github.com/repos/<GAMEDETECT_UPDATE_REPO>/releases/latest`
+   (10 s timeout, at most 1 MB, `User-Agent: pfSense-pkg-gamedetect/<version>`).
+   The repo is a constant in `gamedetect.inc`, not a setting.
+2. `gd_update_parse_release()`: `tag_name` must be exactly `vX.Y.Z`
+   (`\z`-anchored, so a trailing newline fails too); drafts and prereleases
+   are refused. The asset must be named exactly
+   `pfSense-pkg-gamedetect-X.Y.Z-fbsd<major>.pkg`, and it and the
+   `SHA256SUMS` asset must have a `browser_download_url` under
+   `https://github.com/<repo>/releases/download/`, one tag segment, ending
+   in `/<name>`. `html_url` is kept only if it is a release page of the repo.
+   `body` is kept as `notes`, cut to 4 KB.
+3. GET `SHA256SUMS` (10 s, at most 64 KB) and take the hash for that asset
+   (`gd_update_parse_sums()`: `sha256 -r`, `sha256sum` text/binary and BSD
+   tag lines).
+4. Write `/var/db/gamedetect/update.json` atomically (temp file + rename):
+   `checked_at, installed, latest, update_available, release_url, notes,
+   asset_url, asset_name, sha256, error`. `update_available` is
+   `version_compare(latest, installed, '>')` on strict `x.y.z` values. On any
+   failure `error` is set and the previous release fields are kept;
+   `update_available` is recomputed from the previous `latest` and the
+   current installed version, so a manual upgrade clears it.
+
+The FreeBSD major is `php_uname('r')` ("16.0-RELEASE" -> 16), with no
+subprocess; it is the running kernel's release, which on pfSense matches
+the `FreeBSD:<major>` package ABI. The installed version is read from
+`info.xml`, into which `build.sh` substitutes the package version, so it is
+always the version of the files on disk and needs no subprocess; `pkg query
+%v pfSense-pkg-gamedetect` (argv, no shell) is the fallback.
+
+HTTP uses PHP's curl extension when loaded (HTTPS only, also for
+redirects; up to 5 redirects; certificate and host verification on; the
+size cap enforced while streaming), else the `https://` stream wrapper with
+an equivalent context. No shell is involved.
+
+**Show.** `gd_status_update_html()` renders the banner on every tab of the
+status page from `update.json` and `gd_update_run_view()` of
+`update-run.json`: the available release with a release-notes link
+(`rel="noopener"`), **Update now** / **Check now** for users allowed on
+`pkg_edit.php?xml=gamedetect.xml`, and the last check time and error in
+`text-muted`. Every value is escaped.
+
+**Update now** (POST `act=update`). `gd_update_post_action()` decides the
+action from the method, `act` and the settings privilege before any action
+code runs; without the privilege the response is 403 and nothing happens.
+csrf-magic guards the form as for every pfSense POST.
+`gamedetect_update_start()` refuses when an update is running (lock held,
+or `update-run.json` says running within its grace period) or none is
+available, writes a `running` state, and starts
+`/usr/sbin/daemon -f /usr/local/bin/php -f /usr/local/libexec/gamedetect/update-run.php`
+with `mwexec_bg()`. The command line is a constant: nothing from the
+request reaches it. `daemon(8)` detaches the updater, so it survives the web
+request ending and the package files being replaced under it.
+
+**Run** (`update-run.php`, `gamedetect_update_run()` -> `gd_update_run()`):
+
+1. Take `/var/run/gamedetect-update.lock` (created with `O_EXCL`, holds the
+   pid). A lock whose pid is dead, whose content is not a pid, or that is
+   over an hour old (pid reuse) is stale and replaced. A second updater
+   exits without touching anything.
+2. Re-read `update.json`; never trust the request. Re-validate: `latest` is
+   `x.y.z` and newer than the version installed now, `asset_name` is exactly
+   the name for `latest` and the running major, `asset_url` passes the same
+   prefix check as the check, `sha256` is 64 hex digits.
+3. Download to `/tmp/gamedetect-update.<16 random hex>.pkg` (created
+   exclusively, mode 0600; HTTPS, 120 s, at most 20 MB).
+4. Verify the sha256 (`hash_equals`); on mismatch delete the file and stop:
+   `pkg` never runs.
+5. `pkg add -f <file>` via `proc_open()` with an argv array and a fixed
+   environment (`PATH`, `HOME`, `LANG`; the package scripts call `cp`,
+   `mkdir`, `php`), 15 min cap, output captured. Delete the file.
+6. Re-run the check in a fresh PHP process (the new code), so
+   `update.json` shows the new installed version.
+
+Progress and the result go to `/var/db/gamedetect/update-run.json`:
+`state (running|done|failed), started_at, finished_at, from, to, log (last
+4 KB of pkg output), error`. While it says running, the status page polls
+`?format=update_status` (the run view without the log) every 3 s and
+navigates to itself once (`location.replace`, no resubmission) when the
+state changes; the reloaded page shows the result, so there is no reload
+loop. A `running` file with no lock holder 60 s after it started is shown
+as failed (the updater died). Results are shown for a day.
+
+**Security notes.**
+
+- The updater never runs without an administrator clicking **Update now**;
+  the daily job only reads release metadata.
+- `SHA256SUMS` comes from the same GitHub release as the package. The check
+  protects against a corrupted, truncated or swapped-in-transit download,
+  not against a compromised release or repository: anyone who can publish
+  a release in the repo can publish a matching checksum. Releases are built
+  by the repository's CI workflow.
+- Downloads are pinned to `https://github.com/<repo>/releases/download/`
+  (GitHub then redirects to its download host); with curl, redirects are
+  HTTPS-only.
+- No user input reaches a command line: the detached command is a constant,
+  `pkg` and the check are run with argv arrays, the temp file name is
+  generated, and everything the updater uses is re-read from `update.json`
+  and re-validated.
+- `pkg add` runs the package's own install scripts as root, as any manual
+  `pkg add` does.
 
 ## Known limitations
 

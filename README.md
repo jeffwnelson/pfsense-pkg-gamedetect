@@ -361,9 +361,11 @@ Build a package (on FreeBSD, needs `pkg` and PHP):
 ```
 
 `./build.sh 0.2.0 16 --dry-run` stages the tree and prints the manifest and
-file list without needing `pkg`. CI (`.github/workflows/build.yml`) runs the
-tests and builds both packages in a FreeBSD VM on every `v*` tag and
-publishes them, with `SHA256SUMS`, as a GitHub release.
+file list without needing `pkg`. CI (`.github/workflows/release.yml`) runs
+the tests and builds both packages in a FreeBSD VM on every pull request and
+push to `main`, and publishes releases (see [Releases](#releases)). A manual
+run of the workflow uploads development packages (version
+`0.0.0.g<commit>`) as a build artifact without releasing.
 
 How it works: [docs/architecture.md](docs/architecture.md). Acceptance
 checklist for your own install: [docs/testing.md](docs/testing.md).
@@ -380,6 +382,20 @@ prefix list. Changing the shipped default also means adding the previous
 default's sha256 to `signatures.default.history` (the tests check this), so
 unedited installs pick up the change on upgrade. Run `sh tests/run.sh` before
 you push.
+
+### Releases
+
+Versions are not set by hand. Commit messages follow
+[Conventional Commits](https://www.conventionalcommits.org/), and every push
+to `main` runs [cocogitto](https://github.com/cocogitto/cocogitto)'s
+`cog bump --auto`: since the last tag, a `fix:` makes a patch release, a
+`feat:` a minor release, and a breaking change (`feat!:` or a
+`BREAKING CHANGE:` footer) a major one (a minor one while the version is
+0.x). Other types (`docs:`, `ci:`, `refactor:`, `chore:`, ...) do not
+release. CI then updates [CHANGELOG.md](CHANGELOG.md), tags `vX.Y.Z`, builds
+both packages and publishes the GitHub release. Pull requests fail if a
+commit message is not conventional; `cog install-hook --all` installs a
+local commit-msg hook that checks it before you commit.
 
 ## License
 

@@ -443,6 +443,24 @@ changes. Existing installs keep their saved values.
   attaches version-less copies (`pfSense-pkg-gamedetect-fbsd16.pkg`,
   `pfSense-pkg-gamedetect-fbsd15.pkg`) to each release so
   `releases/latest/download/` URLs always point at the newest build.
+- **Versions and releases.** The version lives only in git tags (`vX.Y.Z`);
+  no file in the tree carries it. `build.sh` substitutes it for
+  `%%PKGVERSION%%` in `gamedetect.xml` and `info.xml`, and the updater reads
+  the installed version back from `info.xml`. One workflow,
+  `.github/workflows/release.yml`, runs `cog check --from-latest-tag` (every
+  commit since the last tag must be a conventional commit) and the tests in
+  a FreeBSD VM on pull requests and pushes to `main`. On a push to `main` it
+  then runs `cog bump --auto` (cocogitto 6.4.0, configured in `cog.toml`):
+  `fix` bumps the patch, `feat` the minor, a breaking change the major
+  (minor while 0.x); with no such commit nothing is released. A bump
+  prepends the release to `CHANGELOG.md`, commits it, tags `vX.Y.Z` and
+  pushes both. Pushes made with the workflow token do not start another
+  run, so the same run checks out the tag, builds both packages, writes
+  `SHA256SUMS`, and publishes the GitHub release with that version's
+  `CHANGELOG.md` section as its notes. A manual run builds development
+  packages versioned `0.0.0.g<sha7>`, which sort below every release and
+  are not `x.y.z`, so the self-updater never offers them or compares
+  against them.
 - The rc script is not shipped; `gamedetect.inc` generates it with
   `write_rcfile()` at resync.
 - **Install / upgrade** (`pkg-install.sh`, POST-INSTALL): stop a running

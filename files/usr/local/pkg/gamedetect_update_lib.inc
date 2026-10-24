@@ -270,6 +270,7 @@ function gd_update_check(array $o): array {
  * (update-run.json), repo, major, tmp_dir, download (callable(string $url,
  * string $dest, int $max_bytes): array{ok, error}), pkg_add
  * (callable(string $file): array{rc, output}), recheck (callable(): void),
+ * installed (optional: the version installed now; default update.json's),
  * now (optional), max_bytes (optional, default 20 MB). Never uses request
  * data: everything comes from update.json and is re-validated. The download
  * goes to tmp_dir/gamedetect-update.<random>.pkg, is checked against the
@@ -281,7 +282,8 @@ function gd_update_run(array $o): array {
 	$st = gd_read_json((string)$o['state_path']) ?? [];
 	$repo = (string)($o['repo'] ?? '');
 	$major = (int)($o['major'] ?? 0);
-	$from = is_string($st['installed'] ?? null) ? $st['installed'] : null;
+	$from = $o['installed'] ?? $st['installed'] ?? null;
+	$from = is_string($from) ? $from : null;
 	$to = gd_update_semver($st['latest'] ?? null);
 	$run = ['state' => 'running', 'started_at' => $now(), 'finished_at' => null,
 	    'from' => $from, 'to' => $to, 'log' => '', 'error' => null];

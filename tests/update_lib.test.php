@@ -301,6 +301,8 @@ foreach ($tampered as $what => $patch) {
 	$l = run_case("$tmp/run-t" . $i++, array_merge($good_state, $patch), $pkg_bytes);
 	assert_true($l['result']['state'] === 'failed' && $l['download'] === [] && $l['pkg'] === [], "run refuses update.json with $what");
 }
+$l = run_case("$tmp/run-installed", $good_state, $pkg_bytes, 0, ['installed' => '0.3.0']);
+assert_true($l['result']['state'] === 'failed' && $l['download'] === [], 'run refuses when the actually installed version is already the latest');
 $l = run_case("$tmp/run-nostate", [], $pkg_bytes);
 assert_true($l['result']['state'] === 'failed' && $l['download'] === [], 'run refuses without update.json content');
 

@@ -84,6 +84,13 @@
 			<type>input</type>
 			<default_value>50</default_value>
 		</field>
+		<field>
+			<fielddescr>Update check</fielddescr>
+			<fieldname>update_check</fieldname>
+			<description>Check daily for new releases on GitHub. This only contacts GitHub (api.github.com, and the release's SHA256SUMS file on github.com) and never installs anything by itself: an available update is shown on Status &gt; Game Detect and installed only when an administrator clicks Update now.</description>
+			<type>checkbox</type>
+			<default_value>on</default_value>
+		</field>
 	</fields>
 	<custom_php_validation_command>
 	<![CDATA[

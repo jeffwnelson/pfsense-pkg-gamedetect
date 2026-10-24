@@ -26,6 +26,9 @@ function fresh(string $name, ?array $pkgcfg): string {
 	    'default_signatures' => "$dir/default.json",
 	    'data_dir' => "$dir/db",
 	    'pid' => "$dir/gamedetectd.pid",
+	    'update_lock' => "$dir/gamedetect-update.lock",
+	    'info_xml' => "$dir/info.xml",
+	    'tmp_dir' => "$dir",
 	];
 	$GLOBALS['stub_ifaces'] = [
 	    'wan' => ['real' => 'igc0', 'ip' => '203.0.113.1', 'subnet' => 29],
@@ -35,6 +38,8 @@ function fresh(string $name, ?array $pkgcfg): string {
 	];
 	$GLOBALS['stub_config'] = $pkgcfg === null ? [] : ['installedpackages' => ['gamedetect' => ['config' => [$pkgcfg]]]];
 	$GLOBALS['stub_mwexec'] = [];
+	$GLOBALS['stub_mwexec_bg'] = [];
+	$GLOBALS['stub_cron_calls'] = [];
 	$GLOBALS['stub_rcfile'] = [];
 	$GLOBALS['stub_rcfile_dir'] = "$dir/rc.d";
 	$GLOBALS['stub_log'] = [];
@@ -221,3 +226,78 @@ $cmd = 'GD_STUB_LEASES=' . escapeshellarg($lf) . ' ' . escapeshellarg(PHP_BINARY
     . ' -f ' . escapeshellarg(__DIR__ . '/../files/usr/local/libexec/gamedetect/leases.php');
 $lout = (string)shell_exec($cmd);
 assert_eq(['10.10.3.17' => 'gamer-pc', '10.10.3.18' => "caf\u{FFFD}-pc"], json_decode($lout, true), 'leases.php: invalid UTF-8 hostname substituted, others kept');
+
+/* update_check setting: on when never saved, and for configs saved before the field existed */
+const CRON_CMD = '/usr/local/bin/php -f /usr/local/libexec/gamedetect/update-check.php';
+fresh('upd-setting', null);
+assert_eq(true, gamedetect_settings()['update_check'], 'update_check defaults on (never saved)');
+fresh('upd-setting2', ['enable' => 'on', 'attendee_networks' => 'lan']);
+assert_eq(true, gamedetect_settings()['update_check'], 'update_check on for a config saved before the field existed');
+fresh('upd-setting3', ['enable' => 'on', 'attendee_networks' => 'lan', 'update_check' => '']);
+assert_eq(false, gamedetect_settings()['update_check'], 'update_check unchecked -> off');
+fresh('upd-setting4', ['enable' => 'on', 'attendee_networks' => 'lan', 'update_check' => 'on']);
+assert_eq(true, gamedetect_settings()['update_check'], 'update_check checked -> on');
+assert_eq('jeffwnelson/pfsense-pkg-gamedetect', GAMEDETECT_UPDATE_REPO, 'update repo constant');
+
+/* resync installs the daily cron job at 04:xx and keeps its minute */
+$cron_items = fn(): array => array_values(array_filter((array)config_get_path('cron/item', []), fn($i) => ($i['command'] ?? '') === CRON_CMD));
+fresh('upd-cron', null);
+gamedetect_resync();
+$items = $cron_items();
+assert_eq(1, count($items), 'resync installs one update-check cron job');
+assert_true(ctype_digit((string)($items[0]['minute'] ?? '')) && (int)$items[0]['minute'] >= 0 && (int)$items[0]['minute'] <= 59, 'cron minute 0-59');
+assert_eq(['4', '*', '*', '*', 'root'], [$items[0]['hour'], $items[0]['mday'], $items[0]['month'], $items[0]['wday'], $items[0]['who']], 'cron daily at 04:xx as root');
+$minute = $items[0]['minute'];
+gamedetect_resync();
+$items = $cron_items();
+assert_eq([1, $minute], [count($items), $items[0]['minute']], 'second resync keeps one job and its minute (no config churn)');
+$GLOBALS['stub_config']['installedpackages']['gamedetect']['config'][0] = ['enable' => 'on', 'attendee_networks' => 'lan', 'update_check' => ''];
+gamedetect_resync();
+assert_eq([], $cron_items(), 'resync with update_check off removes the cron job');
+$last = end($GLOBALS['stub_cron_calls']);
+assert_eq([CRON_CMD, false], [$last[0], $last[1]], 'removal goes through install_cron_job(cmd, false)');
+
+/* deinstall removes the cron job and the lock; an upgrade keeps both */
+$dir = fresh('upd-deinstall', null);
+gamedetect_resync();
+file_put_contents("$dir/gamedetect-update.lock", "1\n");
+putenv('PKG_UPGRADE=1');
+gamedetect_deinstall();
+putenv('PKG_UPGRADE');
+assert_eq(1, count($cron_items()), 'deinstall during upgrade keeps the cron job');
+assert_true(is_file("$dir/gamedetect-update.lock"), 'deinstall during upgrade keeps the lock (the updater holds it)');
+gamedetect_deinstall();
+assert_eq([], $cron_items(), 'deinstall removes the cron job');
+assert_true(!file_exists("$dir/gamedetect-update.lock"), 'deinstall removes the lock');
+
+/* installed version comes from the built info.xml */
+$dir = fresh('upd-version', null);
+file_put_contents("$dir/info.xml", "<pfsensepkgs><package><version>0.2.0</version></package></pfsensepkgs>\n");
+assert_eq('0.2.0', gamedetect_installed_version(), 'installed version from info.xml');
+
+/* Update now: refuses without an update, starts the fixed detached command, refuses while running */
+$dir = fresh('upd-start', null);
+file_put_contents("$dir/info.xml", "<pfsensepkgs><package><version>0.2.0</version></package></pfsensepkgs>\n");
+$r = gamedetect_update_start();
+assert_true($r['ok'] === false && is_string($r['error']) && $GLOBALS['stub_mwexec_bg'] === [], 'update start without update.json -> refused, nothing started');
+mkdir("$dir/db", 0755, true);
+file_put_contents("$dir/db/update.json", json_encode(['installed' => '0.2.0', 'latest' => '0.3.0', 'update_available' => true]));
+$r = gamedetect_update_start();
+assert_eq(true, $r['ok'], 'update start ok (' . ($r['error'] ?? '') . ')');
+assert_eq(['/usr/sbin/daemon -f /usr/local/bin/php -f /usr/local/libexec/gamedetect/update-run.php'], $GLOBALS['stub_mwexec_bg'], 'update start runs the fixed detached updater command');
+$run = json_decode((string)@file_get_contents("$dir/db/update-run.json"), true);
+assert_eq(['running', '0.2.0', '0.3.0'], [$run['state'] ?? null, $run['from'] ?? null, $run['to'] ?? null], 'update start records a running state');
+assert_eq('running', gamedetect_update_status()['run']['state'], 'status shows the update running');
+$r = gamedetect_update_start();
+assert_true($r['ok'] === false && count($GLOBALS['stub_mwexec_bg']) === 1, 'update start refused while an update is running');
+file_put_contents("$dir/db/update-run.json", json_encode(['state' => 'done', 'to' => '0.3.0']));
+file_put_contents("$dir/gamedetect-update.lock", getmypid() . "\n");
+$r = gamedetect_update_start();
+assert_true($r['ok'] === false && count($GLOBALS['stub_mwexec_bg']) === 1, 'update start refused while the lock is held by a live pid');
+$dead = 999999;
+while (gd_update_pid_alive($dead)) {
+	$dead++;
+}
+file_put_contents("$dir/gamedetect-update.lock", "$dead\n");
+$r = gamedetect_update_start();
+assert_true($r['ok'] === true && count($GLOBALS['stub_mwexec_bg']) === 2, 'update start proceeds past a stale lock');

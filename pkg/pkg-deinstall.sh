@@ -22,6 +22,7 @@ POST-DEINSTALL)
 		exit 0
 	fi
 	rm -rf "$root/var/db/gamedetect"
+	rm -f "$root/var/run/gamedetect-update.lock"
 	;;
 esac
 exit 0

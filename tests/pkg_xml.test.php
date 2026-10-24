@@ -66,6 +66,7 @@ $want = [
     'dns_refresh' => ['input', '30'],
     'rdns_enabled' => ['checkbox', 'on'],
     'unknown_list_size' => ['input', '50'],
+    'update_check' => ['checkbox', 'on'],
 ];
 $have = [];
 foreach ($x->fields->field as $f) {
@@ -85,6 +86,9 @@ assert_true(!isset($have['extra_cidrs']->encoding), 'extra_cidrs not base64-enco
 foreach (['poll_interval' => '2-60', 'idle_timeout' => '30-900', 'dns_refresh' => '10-300', 'unknown_list_size' => '10-500'] as $n => $r) {
 	assert_true(str_contains((string)$have[$n]->description, $r), "$n description states range $r");
 }
+
+$ud = (string)($have['update_check']->description ?? '');
+assert_true(str_contains($ud, 'api.github.com') && str_contains($ud, 'never installs'), 'update_check description: what it contacts, never installs by itself');
 
 $hooks = [
     'custom_php_validation_command' => 'gamedetect_validate_input($_POST, $input_errors);',

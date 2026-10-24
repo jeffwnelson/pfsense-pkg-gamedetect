@@ -33,7 +33,7 @@ function gamedetect_page_payload(array $daemon): array {
 
 $gd_daemon = gamedetect_status();
 $gd_reset_error = null;
-$gd_update_error = null;
+$gd_update_error = gd_status_update_error($_GET['update_error'] ?? null);
 $gd_tabs = ['clients' => gettext('Clients'), 'unclassified' => gettext('Unclassified'), 'signatures' => gettext('Signatures')];
 $gd_tab = is_string($_GET['tab'] ?? null) && isset($gd_tabs[$_GET['tab']]) ? $_GET['tab'] : 'clients';
 $gd_can_settings = isAllowedPage('pkg_edit.php?xml=gamedetect.xml');
@@ -46,7 +46,7 @@ if ($gd_act === 'forbidden') {
 		$gd_reset_error = gettext('Resetting the signatures needs permission to change the Game Detect settings (Services > Game Detect).');
 		$gd_tab = 'signatures';
 	} else {
-		$gd_update_error = gettext('Updating Game Detect needs permission to change the Game Detect settings (Services > Game Detect).');
+		$gd_update_error = gettext(gd_status_update_error('forbidden'));
 	}
 } elseif ($gd_act === 'reset_signatures') {
 	$gd_reset = gamedetect_reset_signatures(gamedetect_path('signatures'), gamedetect_path('default_signatures'));
@@ -61,12 +61,11 @@ if ($gd_act === 'forbidden') {
 }
 $gd_self = 'status_gamedetect.php' . ($gd_tab === 'clients' ? '' : '?tab=' . $gd_tab);
 if ($gd_act === 'update' || $gd_act === 'update_check') {
+	/* Redirect either way (no resubmission on reload); a failure carries only a fixed code. */
 	$gd_r = $gd_act === 'update' ? gamedetect_update_start() : gamedetect_update_check_now();
-	if ($gd_r['ok']) {
-		header('Location: ' . $gd_self);
-		exit;
-	}
-	$gd_update_error = $gd_r['error'];
+	$gd_code = !$gd_r['ok'] && gd_status_update_error($gd_r['code']) !== null ? $gd_r['code'] : null;
+	header('Location: ' . $gd_self . ($gd_code === null ? '' : (str_contains($gd_self, '?') ? '&' : '?') . 'update_error=' . $gd_code));
+	exit;
 }
 
 if (($_GET['format'] ?? null) === 'update_status') {

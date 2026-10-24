@@ -488,22 +488,27 @@ Check automatically, install only on click.
 installs with pfSense's `install_cron_job()` (`/usr/local/bin/php -f
 /usr/local/libexec/gamedetect/update-check.php`, hour 4, a random minute
 chosen once and then kept so resyncs do not rewrite `config.xml`), and
-synchronously by **Check now** (killed after 15 s). The job is removed when
+synchronously by **Check now** (killed after 30 s, which covers the
+`pkg query` fallback plus both requests; the POST always redirects, a
+failure carrying only a fixed `?update_error=<code>` that the page maps to
+a fixed message, so no text from the URL is shown). The job is removed when
 **Update check** is off and on package removal (kept during an upgrade,
 where the post-install resync re-asserts it).
 
 1. GET `https://api.github.com/repos/<GAMEDETECT_UPDATE_REPO>/releases/latest`
-   (10 s timeout, at most 1 MB, `User-Agent: pfSense-pkg-gamedetect/<version>`).
-   The repo is a constant in `gamedetect.inc`, not a setting.
+   (8 s timeout, at most 1 MB, `User-Agent: pfSense-pkg-gamedetect/<version>`).
+   The repo is a constant in `gamedetect.inc`, not a setting. HTTP 403 or
+   429 is reported as "GitHub rate limit reached, try again later"
+   (unauthenticated API calls are limited per source IP).
 2. `gd_update_parse_release()`: `tag_name` must be exactly `vX.Y.Z`
    (`\z`-anchored, so a trailing newline fails too); drafts and prereleases
    are refused. The asset must be named exactly
    `pfSense-pkg-gamedetect-X.Y.Z-fbsd<major>.pkg`, and it and the
    `SHA256SUMS` asset must have a `browser_download_url` under
    `https://github.com/<repo>/releases/download/`, one tag segment, ending
-   in `/<name>`. `html_url` is kept only if it is a release page of the repo.
+   in `/<name>`, with no percent-encoding (so no encoded `../`). `html_url` is kept only if it is a release page of the repo.
    `body` is kept as `notes`, cut to 4 KB.
-3. GET `SHA256SUMS` (10 s, at most 64 KB) and take the hash for that asset
+3. GET `SHA256SUMS` (8 s, at most 64 KB) and take the hash for that asset
    (`gd_update_parse_sums()`: `sha256 -r`, `sha256sum` text/binary and BSD
    tag lines).
 4. Write `/var/db/gamedetect/update.json` atomically (temp file + rename):
@@ -512,7 +517,13 @@ where the post-install resync re-asserts it).
    `version_compare(latest, installed, '>')` on strict `x.y.z` values. On any
    failure `error` is set and the previous release fields are kept;
    `update_available` is recomputed from the previous `latest` and the
-   current installed version, so a manual upgrade clears it.
+   current installed version.
+
+`update.json`'s stored `update_available` is not trusted later either:
+`gamedetect_update_status()` (the banner and **Update now**) recomputes it
+from the version installed at that moment (`gd_update_effective()`), and
+every resync (so every install or upgrade) rewrites `update.json` the same
+way, so a manual `pkg add` clears the banner straight away.
 
 The FreeBSD major is `php_uname('r')` ("16.0-RELEASE" -> 16), with no
 subprocess; it is the running kernel's release, which on pfSense matches
@@ -521,10 +532,19 @@ the `FreeBSD:<major>` package ABI. The installed version is read from
 always the version of the files on disk and needs no subprocess; `pkg query
 %v pfSense-pkg-gamedetect` (argv, no shell) is the fallback.
 
-HTTP uses PHP's curl extension when loaded (HTTPS only, also for
+HTTP needs PHP's curl extension (present on pfSense): HTTPS only, also for
 redirects; up to 5 redirects; certificate and host verification on; the
-size cap enforced while streaming), else the `https://` stream wrapper with
-an equivalent context. No shell is involved.
+size cap enforced while streaming. There is deliberately no fallback to
+PHP's `https://` stream wrapper, which would follow a redirect to plain
+`http://` and let a man in the middle serve both `SHA256SUMS` and the
+package to a root updater; without curl the check fails with "PHP curl
+extension required". No shell is involved.
+
+Commands (`pkg add`, `pkg query`, the re-check) run through
+`gd_update_exec()`: `proc_open()` with an argv array, output captured,
+and a hard deadline that also covers a child that closed its output but
+keeps running (the exit is polled with `proc_get_status()`, then SIGKILL),
+so `proc_close()` can never block past it.
 
 **Show.** `gd_status_update_html()` renders the banner on every tab of the
 status page from `update.json` and `gd_update_run_view()` of
@@ -584,8 +604,8 @@ as failed (the updater died). Results are shown for a day.
   a release in the repo can publish a matching checksum. Releases are built
   by the repository's CI workflow.
 - Downloads are pinned to `https://github.com/<repo>/releases/download/`
-  (GitHub then redirects to its download host); with curl, redirects are
-  HTTPS-only.
+  (GitHub then redirects to its download host); redirects are HTTPS-only,
+  and there is no non-curl code path.
 - No user input reaches a command line: the detached command is a constant,
   `pkg` and the check are run with argv arrays, the temp file name is
   generated, and everything the updater uses is re-read from `update.json`

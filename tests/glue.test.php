@@ -301,3 +301,22 @@ while (gd_update_pid_alive($dead)) {
 file_put_contents("$dir/gamedetect-update.lock", "$dead\n");
 $r = gamedetect_update_start();
 assert_true($r['ok'] === true && count($GLOBALS['stub_mwexec_bg']) === 2, 'update start proceeds past a stale lock');
+
+/* availability follows the version installed now (manual upgrade), at render time and for Update now */
+$dir = fresh('upd-effective', null);
+file_put_contents("$dir/info.xml", "<pfsensepkgs><package><version>0.3.0</version></package></pfsensepkgs>\n");
+mkdir("$dir/db", 0755, true);
+file_put_contents("$dir/db/update.json", json_encode(['installed' => '0.2.0', 'latest' => '0.3.0', 'update_available' => true]));
+$c = gamedetect_update_status()['check'];
+assert_eq(['0.3.0', false], [$c['installed'], $c['update_available']], 'status: stored update_available ignored after a manual upgrade');
+$r = gamedetect_update_start();
+assert_true($r['ok'] === false && $r['code'] === 'none' && $GLOBALS['stub_mwexec_bg'] === [], 'update start after a manual upgrade -> refused (none)');
+/* resync rewrites update.json for the installed version */
+gamedetect_resync();
+$disk = json_decode((string)file_get_contents("$dir/db/update.json"), true);
+assert_eq(['0.3.0', false, '0.3.0'], [$disk['installed'], $disk['update_available'], $disk['latest']], 'resync refreshes update.json for the installed version');
+
+/* update start / check now report fixed error codes */
+$dir = fresh('upd-codes', null);
+assert_eq('none', gamedetect_update_start()['code'], 'update start without update -> code none');
+assert_true(GAMEDETECT_UPDATE_CHECK_TIMEOUT_S >= 30 && GAMEDETECT_UPDATE_HTTP_TIMEOUT_S <= 8, 'Check now cap (30 s) covers pkg query + two HTTP requests');

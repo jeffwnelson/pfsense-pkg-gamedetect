@@ -34,8 +34,8 @@ const GAMEDETECT_UPDATE_CHECK_CMD = '/usr/local/bin/php -f /usr/local/libexec/ga
 const GAMEDETECT_UPDATE_RUN_CMD = '/usr/sbin/daemon -f /usr/local/bin/php -f /usr/local/libexec/gamedetect/update-run.php';
 const GAMEDETECT_PKG_BIN = '/usr/local/sbin/pkg';
 const GAMEDETECT_UPDATE_ENV = ['PATH' => '/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin', 'HOME' => '/root', 'LANG' => 'C'];
-const GAMEDETECT_UPDATE_CHECK_TIMEOUT_S = 15;  /* Check now (synchronous, in the web request) */
-const GAMEDETECT_UPDATE_HTTP_TIMEOUT_S = 10;   /* releases/latest and SHA256SUMS */
+const GAMEDETECT_UPDATE_CHECK_TIMEOUT_S = 30;  /* Check now: covers pkg query (10 s) + 2 requests (8 s each) */
+const GAMEDETECT_UPDATE_HTTP_TIMEOUT_S = 8;    /* releases/latest and SHA256SUMS, each */
 const GAMEDETECT_UPDATE_DL_TIMEOUT_S = 120;    /* the package download */
 const GAMEDETECT_UPDATE_PKG_TIMEOUT_S = 900;   /* pkg add (runs the package's install scripts) */
 
@@ -276,6 +276,7 @@ function gamedetect_resync(): void {
 		mwexec(GAMEDETECT_RCFILE . ' stop');
 	}
 	gamedetect_update_cron(gamedetect_settings()['update_check']);
+	gamedetect_update_refresh();
 }
 
 /* Settings form validation (Services -> Game Detect). */
@@ -445,10 +446,27 @@ function gamedetect_update_run(): int {
 	return $r['state'] === 'done' ? 0 : 1;
 }
 
-/* ['check' => update.json (or []), 'run' => gd_update_run_view() of update-run.json]. */
+/*
+ * Rewrite update.json for the installed version (resync, so also after
+ * every install or upgrade): a manual `pkg add` clears a stale "update
+ * available" without waiting for the next check.
+ */
+function gamedetect_update_refresh(): void {
+	$path = gamedetect_update_file('check');
+	$c = gd_read_json($path);
+	if ($c !== null) {
+		gd_update_write($path, gd_update_effective($c, gamedetect_installed_version()));
+	}
+}
+
+/*
+ * ['check' => update.json (or []) with installed/update_available recomputed
+ * from the version installed now, 'run' => gd_update_run_view() of update-run.json].
+ */
 function gamedetect_update_status(): array {
+	$c = gd_read_json(gamedetect_update_file('check'));
 	return [
-	    'check' => gd_read_json(gamedetect_update_file('check')) ?? [],
+	    'check' => $c === null ? [] : gd_update_effective($c, gamedetect_installed_version()),
 	    'run' => gd_update_run_view(gd_read_json(gamedetect_update_file('run')),
 		gd_update_lock_holder(gamedetect_path('update_lock')), time()),
 	];
@@ -458,32 +476,36 @@ function gamedetect_update_status(): array {
  * Update now: refuse if an update is running or none is available, record a
  * 'running' state, and start update-run.php detached with daemon(8) so it
  * survives the web request and the package reinstall. No request data is
- * used. Returns ['ok' => bool, 'error' => ?string].
+ * used. Returns ['ok' => bool, 'code' => ?string, 'error' => ?string]; code
+ * is one of running, none, write (see gd_status_update_error()).
  */
 function gamedetect_update_start(): array {
 	$st = gamedetect_update_status();
 	if ($st['run']['state'] === 'running' || gd_update_lock_holder(gamedetect_path('update_lock')) !== null) {
-		return ['ok' => false, 'error' => 'An update is already running.'];
+		return ['ok' => false, 'code' => 'running', 'error' => 'An update is already running.'];
 	}
 	$latest = gd_update_semver($st['check']['latest'] ?? null);
 	if (empty($st['check']['update_available']) || $latest === null) {
-		return ['ok' => false, 'error' => 'No update is available. Use Check now to look for one.'];
+		return ['ok' => false, 'code' => 'none', 'error' => 'No update is available. Use Check now to look for one.'];
 	}
 	$from = gamedetect_installed_version();
 	if (!gd_update_write(gamedetect_update_file('run'), ['state' => 'running', 'started_at' => date(DATE_ATOM),
 	    'finished_at' => null, 'from' => $from, 'to' => $latest, 'log' => '', 'error' => null])) {
-		return ['ok' => false, 'error' => 'Cannot write the update status file.'];
+		return ['ok' => false, 'code' => 'write', 'error' => 'Cannot write the update status file.'];
 	}
 	mwexec_bg(GAMEDETECT_UPDATE_RUN_CMD);
 	log_error("gamedetect: update from v{$from} to v{$latest} started from the status page");
-	return ['ok' => true, 'error' => null];
+	return ['ok' => true, 'code' => null, 'error' => null];
 }
 
-/* Check now: run update-check.php in-line, at most 15 s. Returns ['ok', 'error']. */
+/*
+ * Check now: run update-check.php in-line, at most 30 s. Returns ['ok',
+ * 'code' (timeout), 'error']; a failed check records its own error in update.json.
+ */
 function gamedetect_update_check_now(): array {
 	$e = gd_update_exec(GAMEDETECT_UPDATE_CHECK_ARGV, GAMEDETECT_UPDATE_CHECK_TIMEOUT_S);
 	if ($e['timed_out']) {
-		return ['ok' => false, 'error' => 'The update check did not finish within ' . GAMEDETECT_UPDATE_CHECK_TIMEOUT_S . ' seconds.'];
+		return ['ok' => false, 'code' => 'timeout', 'error' => 'The update check did not finish within ' . GAMEDETECT_UPDATE_CHECK_TIMEOUT_S . ' seconds.'];
 	}
-	return ['ok' => true, 'error' => null];
+	return ['ok' => true, 'code' => null, 'error' => null];
 }

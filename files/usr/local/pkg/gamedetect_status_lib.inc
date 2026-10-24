@@ -204,6 +204,22 @@ function gd_status_datetime($iso): string {
 	return $t === false ? (string)$iso : date('Y-m-d H:i', $t);
 }
 
+/*
+ * Fixed message for an update error flag carried in the redirect after an
+ * Update now / Check now POST (?update_error=<code>); null for anything
+ * else, so text from the URL is never shown.
+ */
+function gd_status_update_error($code): ?string {
+	$m = [
+	    'running' => 'An update is already running.',
+	    'none' => 'No update is available. Use Check now to look for one.',
+	    'write' => 'Cannot write the update status file in /var/db/gamedetect.',
+	    'timeout' => 'The update check did not finish within 30 seconds; check the firewall\'s DNS and internet access, and the system log.',
+	    'forbidden' => 'Updating Game Detect needs permission to change the Game Detect settings (Services > Game Detect).',
+	];
+	return is_string($code) && isset($m[$code]) ? $m[$code] : null;
+}
+
 /* A small POST form back to $action with one act button (csrf-magic adds the token). */
 function gd_status_update_form(string $action, string $act, string $cls, string $icon, string $label): string {
 	$h = 'gd_status_h';

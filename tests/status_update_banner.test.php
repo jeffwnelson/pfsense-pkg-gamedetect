@@ -66,3 +66,12 @@ $h = gd_status_update_html(array_merge($check, ['latest' => '0.3.0"><b>']), $idl
 assert_true(!str_contains($h, '<b>') && !str_contains($h, 'is available'), 'invalid latest -> no available banner');
 $h = gd_status_update_html($check, array_merge($failed, ['error' => '<i>x</i>', 'to' => '<u>']), true, $act, $now);
 assert_true(!str_contains($h, '<i>') && !str_contains($h, '<u>'), 'failed error/to escaped');
+
+/* error flags from the redirect map to fixed messages only */
+foreach (['running', 'none', 'write', 'timeout', 'forbidden'] as $code) {
+	$m = gd_status_update_error($code);
+	assert_true(is_string($m) && $m !== '', "update error code $code has a fixed message");
+}
+assert_null(gd_status_update_error('<script>alert(1)</script>'), 'unknown update error code -> no message (URL text never echoed)');
+assert_null(gd_status_update_error(['none']), 'non-string update error code -> no message');
+assert_null(gd_status_update_error(null), 'no update error code -> no message');

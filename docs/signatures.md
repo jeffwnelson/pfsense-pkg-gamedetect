@@ -84,7 +84,7 @@ being silently ignored.
 
 | Field | Rule |
 |---|---|
-| `id` | `^[a-z0-9_-]+$`, unique. Shown in JSON output and consumed by integrations via the JSON endpoint, so do not rename casually. |
+| `id` | `^[a-z0-9_-]+$`, unique. Shown in the table (the game filter uses it), so do not rename casually. |
 | `name` | Display name, non-empty. |
 | `publisher` | `^[a-z0-9_-]+$`. Titles that share a publisher can be reported as an ambiguous pair (below). |
 | `rules` | Non-empty list. Each rule has a `type` and an integer `weight` 1-100. |

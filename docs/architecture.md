@@ -6,9 +6,7 @@ How pfSense-pkg-gamedetect works, and why it is built the way it is.
 
 The package answers one question for a LAN: which device is playing which
 game right now. It was built for LAN parties, to map the games being played
-to seats; pushing the per-client result to an external seating or event
-system is a possible future integration, which is why the result is also
-available as JSON.
+to seats. The result is shown on the Status > Game Detect page only.
 
 Most multiplayer games talk to cloud-hosted servers over UDP, so every game
 session crosses the firewall as an outbound, NATted UDP flow. pfSense
@@ -216,7 +214,7 @@ is parsed and validated as a whole:
 | `/usr/local/pkg/gamedetect_update_lib.inc` | Updater core: release parsing, checksums, check and run steps, lock. |
 | `/usr/local/pkg/gamedetect_lib.inc` | Pure functions: parsers, loader, classifier, aggregator. |
 | `/usr/local/pkg/gamedetect_status_lib.inc` | Status page helpers (rows, banners, reset). |
-| `/usr/local/www/status_gamedetect.php` | Status > Game Detect and the JSON endpoint. |
+| `/usr/local/www/status_gamedetect.php` | Status > Game Detect (and its internal refresh feeds). |
 | `/etc/inc/priv/gamedetect.priv.inc` | Page privileges. |
 | `/usr/local/share/pfSense-pkg-gamedetect/signatures.default.json` | Shipped default signatures (read-only seed). |
 | `/usr/local/share/pfSense-pkg-gamedetect/signatures.default.history` | sha256 of every earlier shipped default. |
@@ -280,7 +278,11 @@ is parsed and validated as a whole:
   client count, then address, then port, and cut to the Unclassified list
   size.
 
-## JSON outputs
+## Daemon files
+
+The daemon's internal working files in `/var/db/gamedetect/`, read by the
+status page. They are not an interface for other tools and may change
+between releases.
 
 ### clients.json
 
@@ -336,20 +338,21 @@ Timestamps are ISO 8601 in the firewall's local time.
 `state_lines` is the number of state lines after the awk prefilter, not the
 raw `pfctl -ss` count.
 
-### Status endpoint
+### Status page refresh feed
 
-`status_gamedetect.php?format=json` returns `clients.json` (normalised:
-`clients` is always a list, `poll_interval` and `generated_at` always set)
-plus:
-
-- `daemon`: `daemon.json` plus `running` (from the pid file and a
-  signal-0 check).
-- `banner`: the plain-text operator message the page shows (daemon not
-  running, paused, or a warning), or `null`.
-
-It is served with `Cache-Control: no-store` and requires a logged-in
-pfSense session with the Status: Game Detect privilege. The Clients tab
-uses the same endpoint to refresh in place every poll interval.
+The Clients tab refreshes itself in place every poll interval from
+`status_gamedetect.php?refresh=clients`. The feed is internal to the page:
+it carries only what the table script renders
+(`gd_status_refresh_payload()`): per client `ip`, `mac`, `hostname`,
+`game`, `game_id`, `confidence`, `flows`, `last_seen` and
+`top_destinations` (`ip`, `port`, `names`), plus `poll_interval`,
+`generated_at` and `banner` (the plain-text operator message, or `null`).
+Scores, candidates, evidence, `first_seen` and the daemon state stay on
+the firewall. The page embeds the same data for its first render. The feed
+is served with `Cache-Control: no-store` and needs the same logged-in
+session and Status: Game Detect privilege as the page;
+`?format=update_status` is the equivalent internal feed for the updater
+banner. There is no other data endpoint (`?format=json` was removed).
 
 ## Settings
 
@@ -630,5 +633,3 @@ as failed (the updater died). Results are shown for a day.
 - Port ranges are shared by many games; titles that share a publisher's
   network are named only when a game-specific DNS name is present (see
   [signatures.md](signatures.md#known-limitations)).
-- The JSON endpoint needs a logged-in pfSense session; there is no API key
-  access yet.

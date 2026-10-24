@@ -9,7 +9,7 @@ playing which game, right now. A small daemon on the firewall reads the pf
 state table and the Unbound DNS resolver cache once a poll, matches each
 device's outbound UDP flows and the DNS names behind its connections against
 an editable signature file, and shows the result as a live table on
-**Status > Game Detect**, with a JSON endpoint for other tools. There is no
+**Status > Game Detect**. There is no
 packet capture and no payload inspection: it only uses connection metadata
 that pfSense already has.
 
@@ -165,7 +165,7 @@ Confidence levels:
 | high | Game-specific DNS names plus matching game traffic. |
 | medium | Good evidence, but not conclusive (for example DNS plus traffic on the publisher's network, or an ambiguous pair). |
 | low | Game traffic on the publisher's network, a title-unique port, or a fixed client port, but no DNS confirmation. |
-| unknown | UDP traffic that no signature explains with enough confidence. Candidates are still listed in the JSON. |
+| unknown | UDP traffic that no signature explains with enough confidence. Candidates are still recorded in the daemon's `/var/db/gamedetect/clients.json`. |
 
 Some labels name a publisher or engine rather than one game, on purpose:
 
@@ -180,46 +180,6 @@ Some labels name a publisher or engine rather than one game, on purpose:
 - **Epic Games (Fortnite or Rocket League)**, and other `Publisher (A or B)`
   labels: two titles of the same publisher scored within 10 points of each
   other.
-
-## JSON endpoint
-
-```
-https://<firewall>/status_gamedetect.php?format=json
-```
-
-It needs a logged-in pfSense session for a user with the
-**WebCfg - Status: Game Detect** privilege (admins have it). Abbreviated
-example:
-
-```json
-{
-  "generated_at": "2026-10-23T21:04:10-05:00",
-  "poll_interval": 60,
-  "clients": [
-    {
-      "ip": "10.10.3.17",
-      "mac": "a4:5e:60:12:34:56",
-      "hostname": "DESKTOP-K9",
-      "game": "Fortnite",
-      "game_id": "fortnite",
-      "confidence": "high",
-      "score": 85,
-      "candidates": [{"id": "fortnite", "name": "Fortnite", "score": 85}],
-      "evidence": ["port:9000-9100", "dns:*.epicgames.com"],
-      "flows": 3,
-      "first_seen": "2026-10-23T20:41:10-05:00",
-      "last_seen": "2026-10-23T21:04:10-05:00",
-      "top_destinations": [{"ip": "3.120.1.5", "port": 9045, "names": []}]
-    }
-  ],
-  "daemon": {"state": "running", "running": true, "last_poll_ms": 17, "warnings": []},
-  "banner": null
-}
-```
-
-The daemon writes the raw files to `/var/db/gamedetect/`: `clients.json`,
-`unknown.json` (the Unclassified list) and `daemon.json` (daemon state and
-warnings). Full schemas are in [docs/architecture.md](docs/architecture.md#json-outputs).
 
 ## Signatures
 
@@ -353,7 +313,10 @@ over 60 s. Details in [docs/testing.md](docs/testing.md#measured-results).
   The download is checked against the release's `SHA256SUMS`; that
   catches a corrupted or truncated download, but since both come from the
   same GitHub release it does not protect against a compromised release.
-- The status page and JSON endpoint are visible to pfSense users with the
+- Results are shown only on the **Status > Game Detect** page and stay on
+  the firewall: there is no API or data export. The daemon's working files
+  are in `/var/db/gamedetect`.
+- The status page is visible to pfSense users with the
   **WebCfg - Status: Game Detect** privilege; the settings, **Reset to
   defaults**, **Update now** and **Check now** need **WebCfg - Services:
   Game Detect**.
@@ -374,7 +337,6 @@ over 60 s. Details in [docs/testing.md](docs/testing.md#measured-results).
 - Some titles that share a publisher's network (League of Legends and
   Valorant, Steam games) are only told apart by a game-specific DNS name;
   otherwise they show as the publisher-generic label.
-- The JSON endpoint needs a logged-in session; there is no API key.
 
 More in [docs/signatures.md](docs/signatures.md#known-limitations) and
 [docs/architecture.md](docs/architecture.md#known-limitations).

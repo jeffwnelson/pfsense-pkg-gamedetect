@@ -41,8 +41,10 @@ For the unit tests and static checks that run in CI, see
   `signatures.lastgood.json`; `daemon.json` shows `"state": "running"`, a
   recent `last_poll_at`, and `"warnings": []`.
 
-- [ ] `https://<firewall>/status_gamedetect.php?format=json` (logged in)
-  returns JSON with `clients`, `generated_at`, `daemon` and `banner`.
+- [ ] `https://<firewall>/status_gamedetect.php?refresh=clients` (logged in)
+  returns JSON with `clients`, `poll_interval`, `generated_at` and
+  `banner` only (no `daemon`, no per-client `candidates`/`evidence`), and
+  `?format=json` just shows the page.
 
 ### Settings save and reload
 

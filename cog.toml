@@ -1,0 +1,33 @@
+# Copyright 2026 Jeff Nelson
+# Licensed under the Apache License, Version 2.0.
+#
+# cocogitto: conventional commits drive SemVer releases. On every push to
+# main, CI runs `cog bump --auto` (fix -> patch, feat -> minor, breaking
+# change -> major), which commits the CHANGELOG.md update and tags vX.Y.Z.
+from_latest_tag = true
+tag_prefix = "v"
+ignore_merge_commits = true
+branch_whitelist = ["main"]
+disable_bump_commit = false
+skip_ci = "[skip ci]"
+
+# cog 6.4.0 commits and tags locally but does not push; push main first,
+# then the new tag. {{version}} has no prefix, so add the "v".
+post_bump_hooks = [
+  "git push origin main",
+  "git push origin v{{version}}",
+]
+
+[changelog]
+path = "CHANGELOG.md"
+template = "remote"
+remote = "github.com"
+owner = "jeffwnelson"
+repository = "pfsense-pkg-gamedetect"
+
+# Installed locally with `cog install-hook --all`.
+[git_hooks.commit-msg]
+script = """#!/bin/sh
+set -e
+cog verify --file $1
+"""

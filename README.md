@@ -274,6 +274,8 @@ and re-run the install command if it is missing: unofficial packages are not
 reinstalled from the pfSense repository. Your settings are stored in the
 pfSense configuration and come back with the package.
 
+Release notes are in [CHANGELOG.md](CHANGELOG.md).
+
 ## Uninstall
 
 ```sh

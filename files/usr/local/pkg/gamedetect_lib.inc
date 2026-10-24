@@ -4,9 +4,9 @@
  * Licensed under the Apache License, Version 2.0.
  *
  * Pure-PHP helpers for pfSense-pkg-gamedetect. No pfSense dependencies.
+ * The package version lives only in git tags; build.sh substitutes it into
+ * info.xml and gamedetect.xml at build time.
  */
-
-const GD_LIB_VERSION = '0.2.0';
 
 /* True if $ip (dotted quad) lies within any of $cidrs ("a.b.c.d/n" or bare IP = /32). */
 function gd_ip_in_cidrs(string $ip, array $cidrs): bool {
